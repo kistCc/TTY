@@ -1,0 +1,36 @@
+node_modules/
+dist/
+*.map
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+.vscode/
+.idea/
+*.swp
+*.swo
+.env
+.env.local
+resources/icon.iconset/
+
+# 打包产物与本地备份（体积大，不进仓库）
+release/
+_backup/
+
+# 调试会话产生的临时文件与脚本（只留在本地）
+*.command
+*.txt
+文档/
+历史/
+给Codex*.md
+
+# 编译产物（用 npm run build:native 从 scripts/*.m 生成）
+scripts/ocr-macos
+scripts/hotkey-macos
+scripts/axtext-macos
+
+# 非运行必需（文件保留在本地，不进仓库）
+CLAUDE.md
+README_EN.md
+docs/
+scripts/ocr-macos.swift
