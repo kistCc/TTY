@@ -29,7 +29,14 @@
     "mac": {
       "icon": "resources/icon.icns",
       "category": "public.app-category.utilities",
-      "target": "dir",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
       "extendInfo": {
         "NSScreenCaptureUsageDescription": "TTY 需要屏幕录制权限才能截屏并翻译屏幕上的文字。"
       }
@@ -69,6 +76,25 @@
         "to": "scripts/axtext-macos.m"
       }
     ],
-    "asar": true
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "dmg": {
+      "title": "TTY ${version}",
+      "contents": [
+        {
+          "x": 140,
+          "y": 200,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
   }
 }

@@ -3,6 +3,7 @@ import { globalShortcut } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as readline from 'readline';
+import { ensureNativeSync } from './native';
 
 // Two hotkey backends behind the same interface:
 //
@@ -27,6 +28,8 @@ let dismissFn: (() => void) | null = null;
 let saveCacheFn: (() => void) | null = null;
 let cancelFn: (() => void) | null = null;
 let regionFn: (() => void) | null = null;
+let textFn: (() => void) | null = null;
+let clipFn: (() => void) | null = null;
 let permissionDeniedFn: (() => void) | null = null;
 let registerFailedFn: ((accelerators: string[]) => void) | null = null;
 let currentArgs: string[] = [];
@@ -45,6 +48,8 @@ export interface Hotkeys {
   dismiss?: string;
   cache?: string;
   region?: string;
+  text?: string;
+  clip?: string;
 }
 
 export interface HotkeyConfig {
@@ -66,6 +71,16 @@ export function setHotkeyPermissionDeniedHandler(cb: () => void) {
 /// almost always because another app already owns that combo.
 export function setHotkeyRegisterFailedHandler(cb: (accelerators: string[]) => void) {
   registerFailedFn = cb;
+}
+
+/// 划词翻译（翻译选中的文本）。和截图那条链路无关，不参与 backend 的状态机。
+export function setTextCallback(cb: () => void) {
+  textFn = cb;
+}
+
+/// 复制翻译（翻译剪贴板里的文本）。同上，常驻注册。
+export function setClipCallback(cb: () => void) {
+  clipFn = cb;
 }
 
 export function getHotkeyBackend(): HotkeyBackend {
@@ -185,6 +200,8 @@ export const HOTKEY_DEFAULTS = {
   region: 'alt+cmd+r',
   dismiss: 'escape',
   cache: 'shift+s',
+  text: 'alt+d',
+  clip: 'alt+c',
 };
 
 /// Parse a configured hotkey, falling back to this slot's default when the value
@@ -209,6 +226,37 @@ function startBackend() {
     );
     currentArgs = buildArgs(currentHotkeys);
     launch();
+  }
+
+  // 这两个键走 globalShortcut，和上面选了哪个 backend 无关：它们翻译的是文本，
+  // 不看浮层状态，所以常驻注册就够，也不需要输入监控权限。
+  const taken = [toAccelerator(trigger), toAccelerator(region)];
+  registerTextHotkey('划词翻译', currentHotkeys.text, HOTKEY_DEFAULTS.text, taken, () => textFn?.());
+  registerTextHotkey('复制翻译', currentHotkeys.clip, HOTKEY_DEFAULTS.clip, taken, () => clipFn?.());
+}
+
+function registerTextHotkey(
+  label: string,
+  value: string | undefined,
+  fallback: string,
+  taken: string[],
+  handler: () => void
+) {
+  const cfg = parseSlot(value, fallback);
+  if (!isSimpleCombo(cfg)) {
+    console.log(`[hotkey] ${label}快捷键必须是普通组合键（修饰键 + 一个键），已跳过`);
+    return;
+  }
+  const accel = toAccelerator(cfg);
+  if (taken.includes(accel)) {
+    console.log(`[hotkey] ${label}快捷键 ${accel} 和已注册的键重了，已跳过`);
+    return;
+  }
+  if (register(accel, handler)) {
+    taken.push(accel);
+    console.log(`[hotkey] ${accel} = ${label}`);
+  } else {
+    console.log(`[hotkey] ${label}快捷键 ${accel} 注册失败，可能已被其它应用占用`);
   }
 }
 
@@ -306,29 +354,8 @@ function buildArgs(hotkeys?: Hotkeys): string[] {
 }
 
 function launch() {
-  const binaryPath = getHotkeyBinaryPath();
-  const srcPath = binaryPath + '.m';
-
-  // Rebuild when the binary is missing or older than the source.
-  let needsBuild = !fs.existsSync(binaryPath);
-  if (!needsBuild && fs.existsSync(srcPath)) {
-    try {
-      needsBuild = fs.statSync(srcPath).mtimeMs > fs.statSync(binaryPath).mtimeMs;
-    } catch {}
-  }
-  if (needsBuild) {
-    if (!fs.existsSync(srcPath)) return;
-    try {
-      require('child_process').execFileSync('clang', [
-        '-O2', srcPath, '-o', binaryPath,
-        '-framework', 'Foundation', '-framework', 'Carbon',
-        '-framework', 'AppKit', '-fobjc-arc',
-      ]);
-    } catch (e) {
-      console.log('[hotkey] Compile failed:', e);
-      if (!fs.existsSync(binaryPath)) return;
-    }
-  }
+  const { binaryPath, ok } = ensureNativeSync('hotkey-macos');
+  if (!ok) return;
 
   console.log(`[hotkey] Launching with args: ${currentArgs.join(' ')}`);
   const startedAt = Date.now();
@@ -399,8 +426,3 @@ export function sendHotkeyState(state: HotkeyState) {
   }
 }
 
-function getHotkeyBinaryPath(): string {
-  const devPath = path.join(__dirname, '..', '..', 'scripts', 'hotkey-macos');
-  if (fs.existsSync(devPath) || fs.existsSync(devPath + '.m')) return devPath;
-  return path.join(process.resourcesPath, 'scripts', 'hotkey-macos');
-}

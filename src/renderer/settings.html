@@ -61,6 +61,13 @@
     }
     button:hover { background: #b4befe; }
     .hidden { display: none !important; }
+    .check {
+      display: flex; align-items: center; gap: 7px;
+      font-size: 13px; color: #cdd6f4; cursor: pointer;
+      padding: 6px 10px; border: 1px solid #45475a; border-radius: 5px;
+      background: #313244; margin-bottom: 0; user-select: none;
+    }
+    .check input { width: auto; accent-color: #cba6f7; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -100,6 +107,34 @@
         <button class="recordBtn" data-target="cacheKey" data-i18n="record">Record</button>
       </div>
     </div>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label data-i18n="hotkeyText">Selection</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input id="textKey" type="text" readonly style="flex:1;cursor:pointer;min-width:0;" placeholder="⌥D" data-hotkey="textKey">
+        <button class="recordBtn" data-target="textKey" data-i18n="record">Record</button>
+      </div>
+    </div>
+    <div class="field">
+      <label data-i18n="hotkeyClip">Clipboard</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input id="clipKey" type="text" readonly style="flex:1;cursor:pointer;min-width:0;" placeholder="⌥C" data-hotkey="clipKey">
+        <button class="recordBtn" data-target="clipKey" data-i18n="record">Record</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label data-i18n="startup">Startup</label>
+      <label class="check">
+        <input id="openAtLogin" type="checkbox">
+        <span data-i18n="openAtLogin">Launch at login</span>
+      </label>
+    </div>
+    <div class="field"></div>
   </div>
 
   <div class="row">

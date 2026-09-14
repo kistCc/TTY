@@ -3,6 +3,7 @@ import { nativeImage } from 'electron';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import { ensureNative } from './native';
 
 export interface TextBlock {
   text: string;
@@ -40,8 +41,10 @@ export async function performOCRSplit(imagePath: string): Promise<TextBlock[]> {
   const tmpDir = os.tmpdir();
   const results = await Promise.all(quadrants.map(async (q, i) => {
     const cropped = img.crop({ x: q.x, y: q.y, width: q.w, height: q.h });
-    const cropPath = path.join(tmpDir, `ocr-quad-${Date.now()}-${i}.png`);
-    fs.writeFileSync(cropPath, cropped.toPNG());
+    // JPEG 而非 PNG：这四张图只喂给 OCR，不会显示给用户，而全屏尺寸下 PNG 编码
+    // 要几百毫秒，JPEG 只要几十毫秒。质量 92 对 Vision 的识别率没有可测的影响。
+    const cropPath = path.join(tmpDir, `ocr-quad-${Date.now()}-${i}.jpg`);
+    fs.writeFileSync(cropPath, cropped.toJPEG(92));
     const blocks = await performOCR(cropPath);
     try { fs.unlinkSync(cropPath); } catch {}
     // Offset coordinates back to full image space
@@ -70,59 +73,21 @@ function dedupeBlocks(blocks: TextBlock[]): TextBlock[] {
 }
 
 export function performOCR(imagePath: string): Promise<TextBlock[]> {
-  return new Promise((resolve, reject) => {
-    const sourcePath = getSourcePath();
-    const binaryPath = sourcePath.replace('.m', '');
+  return new Promise(async (resolve, reject) => {
+    const { binaryPath, error } = await ensureNative('ocr-macos');
+    if (error) { reject(new Error(error)); return; }
 
-    const run = () => {
-      execFile(binaryPath, [imagePath], { maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
-        if (error) {
-          reject(new Error(`OCR failed: ${stderr || error.message}`));
-          return;
-        }
-        try {
-          const blocks: TextBlock[] = JSON.parse(stdout.trim());
-          resolve(blocks);
-        } catch {
-          reject(new Error(`OCR parse failed: ${stdout}`));
-        }
-      });
-    };
-
-    // Check if binary exists and is newer than source
-    if (fs.existsSync(binaryPath)) {
-      const srcStat = fs.statSync(sourcePath);
-      const binStat = fs.statSync(binaryPath);
-      if (binStat.mtimeMs >= srcStat.mtimeMs) {
-        run();
+    execFile(binaryPath, [imagePath], { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error(`OCR 失败: ${(stderr || err.message).toString().trim().slice(0, 200)}`));
         return;
       }
-    }
-
-    // Compile Objective-C source with clang
-    execFile('clang', [
-      '-O2', sourcePath,
-      '-o', binaryPath,
-      '-framework', 'Foundation',
-      '-framework', 'Vision',
-      '-framework', 'AppKit',
-      '-fobjc-arc',
-    ], (compileErr, _stdout, compileStderr) => {
-      if (compileErr) {
-        reject(new Error(`OCR compilation failed: ${compileStderr || compileErr.message}`));
-        return;
+      try {
+        resolve(JSON.parse(stdout.trim()) as TextBlock[]);
+      } catch {
+        reject(new Error('OCR 输出解析失败'));
       }
-      run();
     });
   });
 }
 
-function getSourcePath(): string {
-  const devPath = path.join(__dirname, '..', '..', 'scripts', 'ocr-macos.m');
-  if (fs.existsSync(devPath)) return devPath;
-
-  const prodPath = path.join(process.resourcesPath, 'scripts', 'ocr-macos.m');
-  if (fs.existsSync(prodPath)) return prodPath;
-
-  throw new Error('OCR source not found');
-}

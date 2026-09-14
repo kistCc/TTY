@@ -9,11 +9,13 @@ import { takeScreenshot } from './screenshot';
 import { performOCR, performOCRSplit, TextBlock } from './ocr';
 import { getAccessibilityText, AXTextBlock } from './accessibility';
 import { translate } from './translator';
-import { getConfig, migrateConfig } from './config';
+import { getConfig, saveConfig, migrateConfig, applyLoginItem } from './config';
+import { debugLog } from './native';
 import { t } from './i18n';
 import { ensureOverlayWindow, showOverlay, hideOverlay, isOverlayVisible, showLoading, hideLoading, showCancelled, setDismissCallback, discardCurrentScreenshot } from './overlay';
-import { createTray, openSettings, setTranslateCallback, setHideCallback, setClearCacheCallback, setOverlayVisibleFn, updateTrayMenu } from './tray';
-import { startHotkeyMonitor, stopHotkeyMonitor, restartWithHotkeys, sendHotkeyState, setHotkeyPermissionDeniedHandler, setHotkeyRegisterFailedHandler, getHotkeyBackend } from './hotkey';
+import { createTray, openSettings, setTranslateCallback, setHideCallback, setClearCacheCallback, setSelectionTranslateCallback, setClipboardTranslateCallback, setOverlayVisibleFn, updateTrayMenu } from './tray';
+import { startHotkeyMonitor, stopHotkeyMonitor, restartWithHotkeys, sendHotkeyState, setHotkeyPermissionDeniedHandler, setHotkeyRegisterFailedHandler, setTextCallback, setClipCallback, getHotkeyBackend } from './hotkey';
+import { showSelectionTranslate, showClipboardTranslate, hideQuick } from './quick';
 import { showSelection, cancelSelection, isSelectionActive } from './selection';
 import { showRegionOverlay, closeAllRegionOverlays } from './region-overlay';
 import * as fs from 'fs';
@@ -117,8 +119,13 @@ app.whenReady().then(() => {
   };
   setDismissCallback(dismissOverlay);
 
-  // Open settings on first launch so user knows the app is running
-  setTimeout(() => openSettings(), 500);
+  // 只有真正第一次启动才弹设置窗，让用户知道应用装好了；之后启动一律只驻留菜单栏。
+  const bootConfig = getConfig();
+  applyLoginItem(bootConfig.openAtLogin);
+  if (!bootConfig.launchedBefore) {
+    saveConfig({ launchedBefore: true });
+    setTimeout(() => openSettings(), 500);
+  }
   setTranslateCallback(() => {
     const now = Date.now();
     if (isProcessing || isRegionProcessing || isOverlayVisible() || now - lastTriggerTime < DEBOUNCE_MS) return;
@@ -131,6 +138,10 @@ app.whenReady().then(() => {
     updateTrayMenu();
   });
   setOverlayVisibleFn(isOverlayVisible);
+  setTextCallback(() => { showSelectionTranslate(); });
+  setClipCallback(() => { showClipboardTranslate(); });
+  setSelectionTranslateCallback(() => { showSelectionTranslate(); });
+  setClipboardTranslateCallback(() => { showClipboardTranslate(); });
   setClearCacheCallback(() => {
     translationCache.clear();
     console.log('[cache] Cleared by user');
@@ -230,6 +241,8 @@ app.whenReady().then(() => {
       dismiss: getConfig().dismissKey,
       cache: getConfig().cacheKey,
       region: getConfig().regionKey,
+      text: getConfig().textKey,
+      clip: getConfig().clipKey,
     }
   );
 
@@ -248,6 +261,7 @@ app.whenReady().then(() => {
 });
 
 async function handleTranslate() {
+  debugLog('=== 全屏翻译开始 ===');
   isProcessing = true;
   isCancelled = false;
   sendHotkeyState('TRANSLATING');
@@ -268,9 +282,14 @@ async function handleTranslate() {
     const scaleFactor = display.scaleFactor;
 
     // Screenshot — hide any UI first so it doesn't get captured
+    hideQuick();
     hideLoading();
-    await new Promise(r => setTimeout(r, 200));
+    // 等浮层真正从屏幕上消失再截屏。100ms 够一帧合成，再长就是白等。
+    await new Promise(r => setTimeout(r, 100));
     const screenshotPath = await takeScreenshot(display.bounds);
+    try {
+      debugLog(`截图 ${screenshotPath} ${fs.statSync(screenshotPath).size} 字节, 显示器 ${display.bounds.width}x${display.bounds.height} @${scaleFactor}x`);
+    } catch (e) { debugLog(`截图失败: ${e}`); }
     showLoading(t('processing', { n: 15 }));
     if (isCancelled) { if (activeProgressTimer) { clearInterval(activeProgressTimer); activeProgressTimer = null; }; cleanup(screenshotPath); return; }
 
@@ -284,8 +303,11 @@ async function handleTranslate() {
 
     const textBlocks = refineWithAccessibility(ocrBlocks, axBlocks, scaleFactor, display.bounds);
     console.log(`[detect] OCR: ${ocrBlocks.length}, AX: ${axBlocks.length}, refined: ${textBlocks.length}`);
+    debugLog(`识别：OCR ${ocrBlocks.length} 块, AX ${axBlocks.length} 块, 合并后 ${textBlocks.length} 块`);
+    if (ocrBlocks.length) debugLog(`OCR 头几条: ${ocrBlocks.slice(0, 5).map(b => b.text).join(' | ')}`);
 
     if (textBlocks.length === 0) {
+      debugLog('一个文本块都没有，结束');
       if (activeProgressTimer) { clearInterval(activeProgressTimer); activeProgressTimer = null; }
       hideLoading(); cleanup(screenshotPath); return;
     }
@@ -320,6 +342,7 @@ async function handleTranslate() {
     const targetLang = config.targetLanguage || 'zh-CN';
     const blocksToTranslate = filterForeignBlocks(cssBlocks, targetLang);
     console.log(`[filter] ${blocksToTranslate.length} blocks to translate`);
+    debugLog(`过滤后剩 ${blocksToTranslate.length} 块要翻译（目标语言 ${targetLang}）`);
     if (blocksToTranslate.length === 0) {
       if (activeProgressTimer) { clearInterval(activeProgressTimer); activeProgressTimer = null; }
       hideLoading(); cleanup(screenshotPath); return;
@@ -337,6 +360,7 @@ async function handleTranslate() {
     }, 400);
     const texts = blocksToTranslate.map(b => b.text);
     const translations = await translate(texts, targetLang, config);
+    debugLog(`翻译回来 ${translations.length} 条，头几条: ${translations.slice(0, 3).join(' | ')}`);
     if (activeProgressTimer) { clearInterval(activeProgressTimer); activeProgressTimer = null; }
     if (isCancelled) { cleanup(screenshotPath); return; }
 
@@ -351,12 +375,14 @@ async function handleTranslate() {
 
     // Show — instant because window is pre-created
     // Don't cleanup screenshotPath here — renderer needs the file for background
+    debugLog(`显示浮层，${translatedBlocks.length} 块`);
     showOverlay({ screenshotPath, blocks: translatedBlocks, displayBounds: display.bounds });
     sendHotkeyState('SHOWN');
     updateTrayMenu();
   } catch (err: any) {
     if (activeProgressTimer) { clearInterval(activeProgressTimer); activeProgressTimer = null; };
     console.error('Translation failed:', err);
+    debugLog(`翻译流程抛错: ${err?.stack || err?.message || err}`);
     const msg = err?.message || String(err);
     showLoading(t('error', { msg: msg.slice(0, 80) }));
     setTimeout(() => hideLoading(), 3000);

@@ -1,4 +1,4 @@
-import { BrowserWindow, screen, ipcMain, app } from 'electron';
+import { BrowserWindow, screen, ipcMain, app, clipboard, nativeImage } from 'electron';
 import { t } from './i18n';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -24,6 +24,33 @@ export interface OverlayData {
 
 let dismissCallback: (() => void) | null = null;
 export function setDismissCallback(cb: () => void) { dismissCallback = cb; }
+
+// 点一下浮层就让它拿到键盘焦点。浮层是 showInactive() 弹出来的（不抢焦点，
+// 免得打断用户手上的事），代价是它一直不是 key window，⌘C 根本到不了它手里——
+// 所以点击时补一次 focus，这也正是 Snipaste 贴图的手感：点一下，然后就能复制。
+ipcMain.on('sticker-focus', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) win.focus();
+});
+
+// 贴图复制：整张浮层（连同译文）进剪贴板，像 Snipaste 的贴图那样可以直接粘到别处。
+// 两个浮层（全屏 / 选区）共用这一对通道。
+ipcMain.on('sticker-copy-image', (_e, dataUrl: string) => {
+  try {
+    const img = nativeImage.createFromDataURL(dataUrl);
+    if (img.isEmpty()) { console.log('[sticker] 贴图为空，没有复制'); return; }
+    clipboard.writeImage(img);
+    console.log(`[sticker] 已复制贴图 ${img.getSize().width}×${img.getSize().height}`);
+  } catch (e) {
+    console.log('[sticker] 复制贴图失败:', e);
+  }
+});
+
+ipcMain.on('sticker-copy-text', (_e, text: string) => {
+  if (typeof text !== 'string' || !text) return;
+  clipboard.writeText(text);
+  console.log(`[sticker] 已复制译文 ${text.length} 字`);
+});
 
 ipcMain.on('dismiss-overlay', () => {
   if (dismissCallback) dismissCallback();

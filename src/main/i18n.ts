@@ -14,6 +14,8 @@ const EN = {
   error: 'Error: {msg}',
 
   trayTranslate: 'Translate',
+  traySelectionTranslate: 'Translate Selection',
+  trayClipboardTranslate: 'Translate Clipboard',
   trayHide: 'Hide',
   trayClearCache: 'Clear Cache',
   traySettings: 'Settings',
@@ -56,6 +58,8 @@ const ZH: Record<Key, string> = {
   error: '出错：{msg}',
 
   trayTranslate: '翻译屏幕',
+  traySelectionTranslate: '划词翻译',
+  trayClipboardTranslate: '复制翻译',
   trayHide: '关闭浮层',
   trayClearCache: '清空缓存',
   traySettings: '设置…',

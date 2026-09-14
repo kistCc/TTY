@@ -13,6 +13,15 @@ contextBridge.exposeInMainWorld('api', {
   resizeBy: (delta: number) => {
     ipcRenderer.send('region-overlay-resize-by', { delta });
   },
+  focusWindow: () => {
+    ipcRenderer.send('sticker-focus');
+  },
+  copyImage: (dataUrl: string) => {
+    ipcRenderer.send('sticker-copy-image', dataUrl);
+  },
+  copyText: (text: string) => {
+    ipcRenderer.send('sticker-copy-text', text);
+  },
   resizeEdge: (mode: string, dx: number, dy: number) => {
     ipcRenderer.send('region-overlay-resize-edge', { mode, dx, dy });
   },

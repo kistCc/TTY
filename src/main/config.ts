@@ -16,6 +16,14 @@ export interface Config {
   dismissKey: string;
   cacheKey: string;
   regionKey: string;
+  /// 划词翻译：翻译此刻选中的文本（需要辅助功能权限）。
+  textKey: string;
+  /// 复制翻译：翻译剪贴板里的文本（不需要任何权限）。
+  clipKey: string;
+  /// 首次启动弹过设置窗之后置为 true，之后启动只驻留菜单栏，不再弹窗。
+  launchedBefore?: boolean;
+  /// 登录时自动启动（静默，不显示任何窗口）。
+  openAtLogin?: boolean;
   targetLanguage: string;
   /// 'zh' | 'en'; unset means follow the system locale.
   uiLanguage?: string;
@@ -29,11 +37,18 @@ export interface Config {
 // the Input Monitoring prompt.
 const LEGACY_CHORD_DEFAULTS = { hotkey: 'shift+z+x', regionKey: 'shift+z+c' };
 
+// ⌥⌘C 是 macOS 上「拷贝样式」的标准快捷键，文本编辑、Pages、Word 这类应用会先把它
+// 吃掉，全局热键就再也收不到。取词翻译改用 ⌥D——和 Easydict 的划词键一致。
+const LEGACY_TEXT_KEY = 'alt+cmd+c';
+
 const DEFAULT_CONFIG: Config = {
   hotkey: 'alt+cmd+t',
   dismissKey: 'escape',
   cacheKey: 'shift+s',
   regionKey: 'alt+cmd+r',
+  textKey: 'alt+d',
+  clipKey: 'alt+c',
+  openAtLogin: false,
   targetLanguage: 'zh-CN',
   provider: 'google',
   providers: {
@@ -99,7 +114,15 @@ export function getConfig(): Config {
 export function migrateConfig(): Config {
   adoptLegacyConfig();
   const current = getConfig();
-  if (current.hotkeyMigratedV2) return current;
+
+  // 取词键的迁移和上面那次和弦迁移是两码事：装过带 ⌥⌘C 那一版的人，
+  // hotkeyMigratedV2 早就是 true 了，不单独判一次就永远换不掉。
+  if (current.textKey === LEGACY_TEXT_KEY) {
+    saveConfig({ textKey: DEFAULT_CONFIG.textKey });
+    console.log(`[config] 取词快捷键 ⌥⌘C 与「拷贝样式」冲突，已改为 ${DEFAULT_CONFIG.textKey}`);
+  }
+
+  if (current.hotkeyMigratedV2) return getConfig();
 
   const changes: Partial<Config> = { hotkeyMigratedV2: true };
   if (current.hotkey === LEGACY_CHORD_DEFAULTS.hotkey) {
@@ -116,6 +139,16 @@ export function migrateConfig(): Config {
     );
   }
   return migrated;
+}
+
+/// 把「开机自启」写进 macOS 登录项。openAsHidden 保证开机启动时不抢焦点、不弹窗。
+export function applyLoginItem(enabled?: boolean) {
+  if (process.platform !== 'darwin') return;
+  try {
+    app.setLoginItemSettings({ openAtLogin: !!enabled, openAsHidden: true });
+  } catch (e) {
+    console.log('[login] 设置登录项失败:', e);
+  }
 }
 
 export function saveConfig(config: Partial<Config>): Config {

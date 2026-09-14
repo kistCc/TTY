@@ -1,7 +1,10 @@
 import { ProviderConfig } from '../config';
 import { request } from '../http';
+import { mapBatchesConcurrent } from '../batch';
 
 const BATCH_SIZE = 20;
+// 各家 OpenAI 兼容接口的并发上限差别很大，3 路是个保守又明显更快的取值。
+const MAX_CONCURRENCY = 3;
 
 export async function translateWithOpenAI(
   texts: string[],
@@ -10,13 +13,12 @@ export async function translateWithOpenAI(
 ): Promise<string[]> {
   if (!config.apiKey) throw new Error('OpenAI API key not configured');
 
-  const results: string[] = [];
-  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-    const batch = texts.slice(i, i + BATCH_SIZE);
-    const translated = await translateBatch(batch, targetLang, config);
-    results.push(...translated);
-  }
-  return results;
+  const batched = await mapBatchesConcurrent<string>(
+    texts, BATCH_SIZE, MAX_CONCURRENCY,
+    (batch) => translateBatch(batch, targetLang, config),
+    (err, batch) => console.error(`[OpenAI] Batch failed (${batch.length} texts):`, err?.message || err)
+  );
+  return batched.flat();
 }
 
 async function translateBatch(

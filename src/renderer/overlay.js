@@ -8,6 +8,7 @@ const ERASE_PAD = 2;
 
 window.api.onShowTranslation((data) => {
   const { screenshotPath, blocks } = data;
+  stickerBlocks = blocks || [];
 
   const img = new Image();
   img.onload = () => {
@@ -92,6 +93,8 @@ function modeToCursor(m) {
 let drag = null;
 document.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
+  // 点一下就拿焦点，否则 ⌘C 收不到（浮层是 showInactive 弹出来的）
+  if (window.api.focusWindow) window.api.focusWindow();
   drag = { x: e.screenX, y: e.screenY, mode: getEdgeMode(e) };
 });
 document.addEventListener('mousemove', (e) => {
@@ -122,6 +125,53 @@ document.addEventListener('wheel', (e) => {
   window.api.resizeBy(-e.deltaY);
 }, { passive: false });
 
+
+// ---------------------------------------------------------------------------
+// 贴图复制（Snipaste 那种手感）：点一下浮层让它拿到焦点，⌘C 就把整张贴图
+// 连同译文一起放进剪贴板，可以直接粘到微信、备忘录、文档里。
+// ⇧⌘C 则复制纯译文——有时候要的是字，不是图。
+// ---------------------------------------------------------------------------
+
+let stickerBlocks = [];
+
+const toastEl = document.getElementById('toast');
+let toastTimer = null;
+function showToast(msg, ms = 1800) {
+  if (!toastEl) return;
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms);
+}
+
+function collectTranslations() {
+  return stickerBlocks
+    .map(b => (b && b.translated ? String(b.translated).trim() : ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey)) return;
+  if (e.key.toLowerCase() !== 'c') return;
+  e.preventDefault();
+
+  if (e.shiftKey) {
+    const text = collectTranslations();
+    if (!text) { showToast('没有可复制的译文'); return; }
+    window.api.copyText(text);
+    showToast('已复制译文');
+    return;
+  }
+
+  try {
+    window.api.copyImage(canvas.toDataURL('image/png'));
+    showToast('已复制贴图');
+  } catch (err) {
+    showToast('复制失败');
+  }
+});
+
 window.api.onClear(() => {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 });
@@ -143,15 +193,18 @@ function clusterRowsAndGetHeights(items) {
   while (i < sorted.length) {
     const startCenter = sorted[i].center;
     const startH = sorted[i].it.h;
-    const tolerance = startH * 0.4;
+    // 至少 1px：块高被缩放成 0 时 tolerance 也会是 0，下面的循环一个都吃不进去，
+    // j 永远等于 i，外层 while 就卡死了（而 rowCenter 还会算成 0/0）
+    const tolerance = Math.max(1, startH * 0.4);
     let j = i;
     let maxH = startH;
     let centerSum = 0;
-    while (j < sorted.length && sorted[j].center - startCenter < tolerance) {
+    // do-while：无论如何先把当前这个吃掉，保证 j 一定前进
+    do {
       maxH = Math.max(maxH, sorted[j].it.h);
       centerSum += sorted[j].center;
       j++;
-    }
+    } while (j < sorted.length && sorted[j].center - startCenter < tolerance);
     const rowCenter = centerSum / (j - i);
     for (let k = i; k < j; k++) result[sorted[k].idx] = { rowH: maxH, rowCenter };
     i = j;

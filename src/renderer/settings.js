@@ -14,6 +14,8 @@ const I18N = {
   en: {
     hotkeyTranslate: 'Full Screen', hotkeyRegion: 'Region',
     hotkeyDismiss: 'Dismiss', hotkeyCache: 'Cache',
+    hotkeyText: 'Selection', hotkeyClip: 'Clipboard',
+    startup: 'Startup', openAtLogin: 'Launch at login',
     record: 'Record', stop: 'Stop',
     targetLang: 'Target Language', provider: 'Provider',
     preset: 'Preset', model: 'Model',
@@ -28,6 +30,8 @@ const I18N = {
   zh: {
     hotkeyTranslate: '全屏翻译', hotkeyRegion: '选区翻译',
     hotkeyDismiss: '关闭浮层', hotkeyCache: '缓存',
+    hotkeyText: '划词翻译', hotkeyClip: '复制翻译',
+    startup: '启动', openAtLogin: '开机自启',
     record: '录制', stop: '停止',
     targetLang: '目标语言', provider: '翻译服务',
     preset: '预设', model: '模型',
@@ -198,6 +202,9 @@ async function doSave() {
     regionKey: hotkeyValue('regionKey') || 'alt+cmd+r',
     dismissKey: hotkeyValue('dismissKey') || 'escape',
     cacheKey: hotkeyValue('cacheKey') || 'shift+s',
+    textKey: hotkeyValue('textKey') || 'alt+d',
+    clipKey: hotkeyValue('clipKey') || 'alt+c',
+    openAtLogin: document.getElementById('openAtLogin').checked,
     targetLanguage: document.getElementById('targetLanguage').value,
     provider,
     providers: currentConfig?.providers || {},
@@ -296,6 +303,9 @@ window.api.getConfig().then(config => {
   setHotkeyField('regionKey', config.regionKey || 'alt+cmd+r');
   setHotkeyField('dismissKey', config.dismissKey || 'escape');
   setHotkeyField('cacheKey', config.cacheKey || 'shift+s');
+  setHotkeyField('textKey', config.textKey || 'alt+d');
+  setHotkeyField('clipKey', config.clipKey || 'alt+c');
+  document.getElementById('openAtLogin').checked = !!config.openAtLogin;
   document.getElementById('targetLanguage').value = config.targetLanguage || 'zh-CN';
   providerSelect.value = config.provider || 'google';
   switchProvider(providerSelect.value);

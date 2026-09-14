@@ -18,10 +18,27 @@
       object-fit: fill;
       pointer-events: none;
     }
+    #toast {
+      position: fixed;
+      left: 50%;
+      bottom: 26px;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.82);
+      color: #fff;
+      padding: 8px 18px;
+      border-radius: 9px;
+      font: 500 13px -apple-system, "PingFang SC", sans-serif;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.18s ease;
+    }
+    #toast.show { opacity: 1; }
   </style>
 </head>
 <body>
   <canvas id="result"></canvas>
+  <div id="toast"></div>
   <script src="overlay.js"></script>
 </body>
 </html>

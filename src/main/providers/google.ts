@@ -1,7 +1,10 @@
 import { ProviderConfig } from '../config';
 import { execSync } from 'child_process';
+import { mapBatchesConcurrent } from '../batch';
 
 const BATCH_SIZE = 20;
+// Google 对单 IP 的免费接口有速率限制，4 路并发是实测下来既快又不触发 429 的档位。
+const MAX_CONCURRENCY = 4;
 let proxyInitialized = false;
 
 function getSystemProxy(): string | null {
@@ -61,23 +64,20 @@ export async function translateWithGoogle(
   ensureProxy();
   const { default: translate } = await import('google-translate-api-x');
 
-  const results: string[] = [];
   let lastError: string | null = null;
-  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-    const batch = texts.slice(i, i + BATCH_SIZE);
-    try {
+  const batched = await mapBatchesConcurrent<string>(
+    texts, BATCH_SIZE, MAX_CONCURRENCY,
+    async (batch) => {
       const res = await translate(batch, { to: targetLang } as any);
       const resAny = res as any;
-      const translated = Array.isArray(resAny)
-        ? resAny.map((r: any) => r.text)
-        : [resAny.text];
-      results.push(...translated);
-    } catch (err: any) {
-      lastError = err.message;
-      console.error(`[Google] Batch ${i} failed:`, err.message);
-      results.push(...batch);
+      return Array.isArray(resAny) ? resAny.map((r: any) => r.text) : [resAny.text];
+    },
+    (err, batch) => {
+      lastError = err?.message || String(err);
+      console.error(`[Google] Batch failed (${batch.length} texts):`, lastError);
     }
-  }
+  );
+  const results = batched.flat();
   if (lastError && results.every((r, i) => r === texts[i])) {
     throw new Error(`Google Translate failed: ${lastError}`);
   }
