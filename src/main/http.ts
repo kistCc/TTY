@@ -3,10 +3,11 @@ import { net } from 'electron';
 interface RequestOptions {
   method: string;
   headers: Record<string, string>;
-  body: string;
+  body?: string;
 }
 
-export function request(url: string, options: RequestOptions): Promise<any> {
+/// 原样返回响应体。有道的网页接口回的是密文，不是 JSON，得先拿到文本再解密。
+export function requestText(url: string, options: RequestOptions): Promise<string> {
   return new Promise((resolve, reject) => {
     const req = net.request({
       url,
@@ -20,18 +21,21 @@ export function request(url: string, options: RequestOptions): Promise<any> {
     req.on('response', (response) => {
       let data = '';
       response.on('data', (chunk) => { data += chunk.toString(); });
-      response.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch {
-          reject(new Error(`Invalid JSON response: ${data.slice(0, 200)}`));
-        }
-      });
+      response.on('end', () => resolve(data));
       response.on('error', reject);
     });
 
     req.on('error', reject);
-    req.write(options.body);
+    if (options.body !== undefined) req.write(options.body);
     req.end();
   });
+}
+
+export async function request(url: string, options: RequestOptions): Promise<any> {
+  const data = await requestText(url, options);
+  try {
+    return JSON.parse(data);
+  } catch {
+    throw new Error(`Invalid JSON response: ${data.slice(0, 200)}`);
+  }
 }

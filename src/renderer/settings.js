@@ -20,10 +20,12 @@ const I18N = {
     targetLang: 'Target Language', provider: 'Provider',
     preset: 'Preset', model: 'Model',
     googleHint: 'Free, no API key required. Powered by Google Translate.',
+    youdaoHint: 'Free, no API key required. Powered by Youdao Translate.',
     switchLang: '中文',
     apiKey: 'API Key', baseUrl: 'Base URL', custom: 'Custom',
     apiKeyPh: 'your-api-key',
-    provGoogle: 'Google Translate (Free)', provOpenAI: 'OpenAI Compatible',
+    provGoogle: 'Google Translate (Free)', provYoudao: 'Youdao Translate (Free)',
+    provOpenAI: 'OpenAI Compatible',
     provClaude: 'Anthropic Compatible', provDeepL: 'DeepL',
     provOllama: 'Ollama (Local)',
   },
@@ -36,10 +38,12 @@ const I18N = {
     targetLang: '目标语言', provider: '翻译服务',
     preset: '预设', model: '模型',
     googleHint: '免费，无需 API Key。由 Google 翻译提供支持。',
+    youdaoHint: '免费，无需 API Key。由有道翻译提供支持。',
     switchLang: 'EN',
     apiKey: 'API Key', baseUrl: '接口地址', custom: '自定义',
     apiKeyPh: '在此粘贴你的 API Key',
-    provGoogle: 'Google 翻译（免费）', provOpenAI: 'OpenAI 兼容接口',
+    provGoogle: 'Google 翻译（免费）', provYoudao: '有道翻译（免费）',
+    provOpenAI: 'OpenAI 兼容接口',
     provClaude: 'Anthropic 兼容接口', provDeepL: 'DeepL',
     provOllama: 'Ollama（本地）',
   },
@@ -89,8 +93,12 @@ const PRESETS = {
 };
 
 // Provider field config: which fields to show
+// 免费服务不需要任何配置项，选中时只显示一行说明
+const FREE_PROVIDER_HINTS = { google: 'googleHint', youdao: 'youdaoHint' };
+
 const PROVIDER_FIELDS = {
   google:  { preset: false, model: false, apiKey: false, baseUrl: false },
+  youdao:  { preset: false, model: false, apiKey: false, baseUrl: false },
   openai:  { preset: true,  model: true,  apiKey: true,  baseUrl: true },
   claude:  { preset: true,  model: true,  apiKey: true,  baseUrl: true },
   deepl:   { preset: false, model: false, apiKey: true,  baseUrl: false },
@@ -107,7 +115,10 @@ const PROVIDER_DEFAULTS = {
 function switchProvider(provider) {
   const fields = PROVIDER_FIELDS[provider] || PROVIDER_FIELDS.openai;
 
-  if (provider === 'google') {
+  const hintKey = FREE_PROVIDER_HINTS[provider];
+  if (hintKey) {
+    freeHint.setAttribute('data-i18n', hintKey);
+    freeHint.textContent = I18N[currentLang][hintKey];
     freeHint.classList.remove('hidden');
     configFields.classList.add('hidden');
     return;
@@ -210,7 +221,7 @@ async function doSave() {
     providers: currentConfig?.providers || {},
   };
   // Save current provider fields
-  if (provider !== 'google') {
+  if (!FREE_PROVIDER_HINTS[provider]) {
     config.providers[provider] = {
       ...(config.providers[provider] || {}),
       model: cfgModel.value.trim() || undefined,

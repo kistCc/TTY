@@ -4,6 +4,7 @@ import { translateWithClaude } from './providers/claude';
 import { translateWithDeepL } from './providers/deepl';
 import { translateWithOllama } from './providers/ollama';
 import { translateWithGoogle } from './providers/google';
+import { translateWithYoudao } from './providers/youdao';
 
 export async function translate(
   texts: string[],
@@ -41,6 +42,8 @@ async function translateUnique(
   switch (provider) {
     case 'google':
       return translateWithGoogle(texts, targetLang, providerConfig);
+    case 'youdao':
+      return translateWithYoudao(texts, targetLang, providerConfig);
     case 'openai':
       return translateWithOpenAI(texts, targetLang, providerConfig);
     case 'claude':
