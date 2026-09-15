@@ -26,7 +26,7 @@
 上游作者 **[@Archer-SQ](https://github.com/Archer-SQ)**，原项目以 MIT 许可证发布。
 截图、OCR、翻译、像素级原位覆盖这套核心设计全部来自上游，在此致谢。
 
-本仓库基于上游 v1.2.3，当前版本 v1.3.0。主要改动：
+本仓库基于上游 v1.2.3，当前版本 v1.3.1。主要改动：
 
 | 改动 | 说明 |
 |---|---|
@@ -40,6 +40,7 @@
 | **贴图复制** | 翻译浮层上 `⌘C` 复制整张贴图、`⇧⌘C` 复制译文；点击浮层即获得键盘焦点 |
 | **启动不打扰** | 只驻留菜单栏，仅首次安装弹一次设置窗；可设为开机自启 |
 | **全屏翻译提速** | 翻译批次并发、翻译前按文本去重、OCR 切图改用 JPEG |
+| **有道翻译** | 新增一档免费翻译服务，不需要 API Key；一屏的文本块合并成一次请求发出、按行拆回，行数对不上时自动退回逐条翻译 |
 
 完整改动见 commit 历史；第一个 commit 是上游 v1.2.3 的原始状态，可直接 diff。
 
@@ -75,7 +76,7 @@
 - **2x2 象限分割 OCR** — 大屏截图切成 4 个重叠象限并行 OCR，精度更高
 - **对比度增强预处理** — Core Image 改善低对比度文字（终端、dim UI）
 - **Vision Revision 3** — 使用 macOS 最新 OCR 模型
-- **多引擎** — Google（免费）/ OpenAI / Anthropic / DeepL / Ollama
+- **多引擎** — Google（免费）/ 有道（免费）/ OpenAI / Anthropic / DeepL / Ollama
 - **翻译缓存** — `Shift+S` 手动保存，相同内容秒显
 - **自动代理** — 自动读取 macOS 系统代理设置
 
@@ -126,18 +127,21 @@ npm run dist
 
 | 快捷键 | 功能 |
 |--------|------|
-| `Shift + Z + X` | 全屏翻译 |
-| `Shift + Z + C` | 选区翻译 |
+| `⌥⌘T` | 全屏翻译 |
+| `⌥⌘R` | 选区翻译 |
+| `⌥D` | 划词翻译（翻译当前选中的文本） |
+| `⌥C` | 复制翻译（翻译剪贴板里的文本） |
 | `ESC` | 关闭浮层 / 取消翻译 |
-| `Shift + S` | 保存当前翻译到缓存 |
+| `⇧S` | 保存当前翻译到缓存 |
 
-所有快捷键可在设置页面自定义。
+以上是默认值，全部可在设置页面自定义。默认这套是普通组合键，不需要任何系统权限。
 
 ## 翻译服务
 
 | 服务 | API Key | 说明 |
 |------|:---:|------|
 | **Google 翻译** | 否 | 免费内置，自动代理 |
+| **有道翻译** | 否 | 免费内置，走网页版接口，国内直连 |
 | **OpenAI 兼容** | 是 | GPT-4o-mini，支持自定义端点 |
 | **Anthropic 兼容** | 是 | Claude、MiniMax 等 |
 | **DeepL** | 是 | 欧洲语言高质量 |
@@ -167,8 +171,13 @@ src/main/                主进程（TypeScript）
   screenshot.ts          区域截图（screencapture -R）
   ocr.ts                 调用 OCR 二进制 + 2x2 象限分割
   accessibility.ts       AX API 包装
-  translator.ts          翻译服务调度
-  providers/             google | openai | claude | deepl | ollama
+  translator.ts          翻译服务调度（含文本去重）
+  batch.ts               批次切分与并发调度
+  providers/             google | youdao | openai | claude | deepl | ollama
+  quick.ts               划词翻译 / 复制翻译的小窗
+  selection-text.ts      取当前选中文本（AX 优先，必要时借剪贴板）
+  native.ts              原生工具的编译与调用
+  http.ts                请求封装（原始文本 / JSON）
   overlay.ts             全屏覆盖层窗口管理
   region-overlay.ts      选区结果浮层管理（可拖拽可缩放，可多开）
   selection.ts           选区绘制窗口（冻结截图背景）
