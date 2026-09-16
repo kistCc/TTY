@@ -6,6 +6,51 @@ import { translateWithOllama } from './providers/ollama';
 import { translateWithGoogle } from './providers/google';
 import { translateWithYoudao } from './providers/youdao';
 
+/// 产品名被硬翻出来最难看：Claude 成了"克劳德"、Claude Code 成了"克劳德代码"。
+/// 整块文本就是一个产品名时直接原样留着，连请求都不用发。
+const KEEP_AS_IS = new Set([
+  'claude', 'claude code', 'cowork', 'anthropic', 'chatgpt', 'openai', 'gemini',
+  'github', 'gitlab', 'notion', 'slack', 'figma', 'xcode', 'vs code', 'visual studio code',
+  'safari', 'chrome', 'firefox', 'finder', 'spotlight', 'siri',
+  'macos', 'ios', 'ipados', 'windows', 'linux', 'android',
+  'python', 'javascript', 'typescript', 'node.js', 'npm', 'json', 'html', 'css',
+  'deepl', 'ollama', 'google', 'youdao', 'tty', 'wi-fi', 'wifi', 'bluetooth',
+]);
+
+function keepAsIs(text: string): boolean {
+  const t = text.trim().replace(/[.:,;!?]+$/, '');
+  if (!t) return true;
+  if (KEEP_AS_IS.has(t.toLowerCase())) return true;
+  // 纯大写缩写：API、OCR、URL、GPU……翻出来只会更难懂
+  if (/^[A-Z0-9]{2,6}$/.test(t)) return true;
+  return false;
+}
+
+
+/// 句内的产品名换成 ⟦0⟧ 这种占位符。用方括号类符号是因为翻译服务会原样带过去，
+/// 不会当成词去翻，也不会被拆开。
+const BRAND_PATTERNS = [
+  /\bClaude Code\b/g, /\bClaude\b/g, /\bChatGPT\b/g, /\bAnthropic\b/g, /\bOpenAI\b/g,
+  /\bGitHub\b/g, /\bmacOS\b/g, /\biOS\b/g, /\bTTY\b/g, /\bCowork\b/g,
+];
+
+function maskBrands(text: string): { text: string; brands: string[] } {
+  const brands: string[] = [];
+  let masked = text;
+  for (const re of BRAND_PATTERNS) {
+    masked = masked.replace(re, (hit) => {
+      brands.push(hit);
+      return `\u27E6${brands.length - 1}\u27E7`;
+    });
+  }
+  return { text: masked, brands };
+}
+
+function unmaskBrands(text: string, brands: string[]): string {
+  if (!brands.length) return text;
+  return text.replace(/\u27E6\s*(\d+)\s*\u27E7/g, (whole, n) => brands[Number(n)] ?? whole);
+}
+
 export async function translate(
   texts: string[],
   targetLang: string,
@@ -15,20 +60,29 @@ export async function translate(
 
   // 一屏里重复的文本很多——同名按钮、重复的标签、多处出现的菜单项。只把去重后的
   // 集合发出去，回来再按原顺序摊开，通常能省掉两三成的请求量。
-  const slotOf = new Map<string, number>();
   const unique: string[] = [];
+  const seen = new Set<string>();
   for (const text of texts) {
-    if (!slotOf.has(text)) {
-      slotOf.set(text, unique.length);
-      unique.push(text);
-    }
+    if (!seen.has(text)) { seen.add(text); unique.push(text); }
   }
   if (unique.length < texts.length) {
     console.log(`[translate] 去重：${texts.length} → ${unique.length} 条`);
   }
 
-  const translated = await translateUnique(unique, targetLang, config);
-  return texts.map(text => translated[slotOf.get(text)!] ?? text);
+  // 产品名这类不用翻的挑出去，剩下的才发出去
+  const needTranslate = unique.filter(text => !keepAsIs(text));
+  // 句子里夹着的产品名（"the summer Claude Code promo…"）换成占位符再发，
+  // 翻译服务照抄不动，回来按原样还回去，就不会有"克劳德代码"了。
+  const masked = needTranslate.map(maskBrands);
+  const translatedList = needTranslate.length
+    ? await translateUnique(masked.map(m => m.text), targetLang, config)
+    : [];
+  const resultOf = new Map<string, string>();
+  needTranslate.forEach((text, i) => {
+    resultOf.set(text, unmaskBrands(translatedList[i] ?? text, masked[i].brands));
+  });
+
+  return texts.map(text => resultOf.get(text) ?? text);
 }
 
 async function translateUnique(

@@ -56,20 +56,32 @@ export async function performOCRSplit(imagePath: string): Promise<TextBlock[]> {
   return dedupeBlocks(all);
 }
 
+/// 象限有 10% 重叠，同一段文字会被识别两次，而两次的断句往往不同
+/// （一次断在 "Heads up: the summer..."，另一次断在 "...ended Sept 13"）。
+/// 所以不能只在文本完全相同时去重，位置压在一起就得留一个，否则同一片区域
+/// 会贴上两层译文。留的是"信息更全"的那块：文本更长，长度相当时取置信度更高的。
 function dedupeBlocks(blocks: TextBlock[]): TextBlock[] {
   const kept: TextBlock[] = [];
   for (const b of blocks) {
-    const duplicate = kept.find(k => {
-      const ix = Math.max(0, Math.min(k.x + k.width, b.x + b.width) - Math.max(k.x, b.x));
-      const iy = Math.max(0, Math.min(k.y + k.height, b.y + b.height) - Math.max(k.y, b.y));
-      const overlap = ix * iy;
-      const bArea = b.width * b.height;
-      const kArea = k.width * k.height;
-      return overlap / Math.min(bArea, kArea) > 0.5 && k.text === b.text;
-    });
-    if (!duplicate) kept.push(b);
+    const idx = kept.findIndex(k => overlapRatio(k, b) > 0.5);
+    if (idx < 0) { kept.push(b); continue; }
+    if (isRicher(b, kept[idx])) kept[idx] = b;
   }
   return kept;
+}
+
+function overlapRatio(a: TextBlock, b: TextBlock): number {
+  const ix = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+  const iy = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  const smaller = Math.min(a.width * a.height, b.width * b.height);
+  return smaller > 0 ? (ix * iy) / smaller : 0;
+}
+
+function isRicher(candidate: TextBlock, current: TextBlock): boolean {
+  const lc = candidate.text.trim().length;
+  const ll = current.text.trim().length;
+  if (lc !== ll) return lc > ll;
+  return candidate.confidence > current.confidence;
 }
 
 export function performOCR(imagePath: string): Promise<TextBlock[]> {

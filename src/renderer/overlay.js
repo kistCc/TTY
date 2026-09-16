@@ -5,6 +5,8 @@ const MIN_FONT_RATIO = 0.6;
 const FONT_HEIGHT_RATIO = 0.75;
 const BLUR_RATIO = 0.15;
 const ERASE_PAD = 2;
+/// 段落译文的行距：字号的多少倍
+const PARAGRAPH_LINE_GAP = 1.28;
 
 window.api.onShowTranslation((data) => {
   const { screenshotPath, blocks } = data;
@@ -31,6 +33,8 @@ window.api.onShowTranslation((data) => {
       y: Math.round(b.y * scaleY),
       w: Math.round(b.width * scaleX),
       h: Math.round(b.height * scaleY),
+      lineH: Math.round((b.lineHeight || b.height) * scaleY),
+      lineCount: b.lineCount || 1,
     }));
     const rowMetrics = clusterRowsAndGetHeights(px);
 
@@ -39,17 +43,27 @@ window.api.onShowTranslation((data) => {
       // Use the row's representative height for font sizing — same row → same font size
       const { rowH, rowCenter } = rowMetrics[i];
 
-      const isBold = rowH > 44;
+      const isParagraph = p.lineCount > 1;
+      const baseH = isParagraph ? p.lineH : rowH;
+      const isBold = baseH > 44;
       const weight = isBold ? 'bold' : 'normal';
       const fontFamily = '-apple-system, "PingFang SC", "Hiragino Sans GB", sans-serif';
-      const originalFontSize = Math.round(rowH * FONT_HEIGHT_RATIO);
+      const originalFontSize = Math.round(baseH * FONT_HEIGHT_RATIO);
 
       const minFontSize = Math.max(10, Math.floor(originalFontSize * MIN_FONT_RATIO));
       let fontSize = originalFontSize;
-      ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
-      while (fontSize > minFontSize && ctx.measureText(block.translated).width > w) {
-        fontSize--;
+      let wrapped = null;
+      if (isParagraph) {
+        // 整段译文要在原来那块地方里排得下：先按框宽折行，放不下就缩字号再试
+        fontSize = fitParagraph(ctx, block.translated, w, h, weight, fontFamily, originalFontSize, minFontSize);
         ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
+        wrapped = wrapText(ctx, block.translated, w);
+      } else {
+        ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
+        while (fontSize > minFontSize && ctx.measureText(block.translated).width > w) {
+          fontSize--;
+          ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
+        }
       }
 
       // Erase original text with sampled background color
@@ -64,10 +78,22 @@ window.api.onShowTranslation((data) => {
         : (bgColor.brightness < 50 ? '#e0e0e0' : '#ffffff');
       ctx.fillStyle = textColor;
       ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
-      ctx.textBaseline = 'middle';
 
-      // Use row-shared center Y so same-row blocks render text at the same vertical position
-      ctx.fillText(block.translated, x, rowCenter, w);
+      if (isParagraph) {
+        ctx.textBaseline = 'top';
+        const lineGap = Math.round(fontSize * PARAGRAPH_LINE_GAP);
+        const totalH = wrapped.length * lineGap;
+        // 段落整体在原框里垂直居中，行数变少时不会挤在顶上
+        let ty = y + Math.max(0, Math.round((h - totalH) / 2));
+        for (const line of wrapped) {
+          ctx.fillText(line, x, ty, w);
+          ty += lineGap;
+        }
+      } else {
+        ctx.textBaseline = 'middle';
+        // Use row-shared center Y so same-row blocks render text at the same vertical position
+        ctx.fillText(block.translated, x, rowCenter, w);
+      }
     });
   };
 
@@ -175,6 +201,41 @@ document.addEventListener('keydown', (e) => {
 window.api.onClear(() => {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 });
+
+
+/// 按框宽折行。中日韩逐字可断，拉丁词按空格断；一个词比整行还长时硬断。
+function wrapText(ctx, text, maxWidth) {
+  const lines = [];
+  let current = '';
+  const tokens = String(text).match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]|[^\s\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]+|\s+/g) || [];
+  for (const token of tokens) {
+    if (/^\s+$/.test(token)) {
+      if (current) current += ' ';
+      continue;
+    }
+    const candidate = current + token;
+    if (current && ctx.measureText(candidate).width > maxWidth) {
+      lines.push(current.trimEnd());
+      current = token;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.trim()) lines.push(current.trimEnd());
+  return lines.length ? lines : [String(text)];
+}
+
+/// 找一个能把整段塞进原框的字号：先按原字号试，排不下就一点点缩，缩到下限为止。
+function fitParagraph(ctx, text, maxWidth, maxHeight, weight, fontFamily, startSize, minSize) {
+  let size = startSize;
+  while (size > minSize) {
+    ctx.font = `${weight} ${size}px ${fontFamily}`;
+    const lines = wrapText(ctx, text, maxWidth);
+    if (lines.length * Math.round(size * PARAGRAPH_LINE_GAP) <= maxHeight) return size;
+    size--;
+  }
+  return minSize;
+}
 
 function detectOriginalFontSize(originalText, boxWidth, boxHeight, weight, fontFamily) {
   return Math.round(boxHeight * FONT_HEIGHT_RATIO);

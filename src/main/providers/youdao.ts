@@ -136,7 +136,14 @@ interface YoudaoTranslateResponse {
   translateResult?: { src: string; tgt: string }[][];
 }
 
-async function translateOne(text: string, targetLang: string): Promise<string> {
+interface TranslateOutcome {
+  /// 译文（有道自己把换行留在 tgt 里，这里原样拼接）
+  text: string;
+  /// 接口回显的原文，用来核对合并批次有没有对错行
+  src: string;
+}
+
+async function translateOne(text: string, targetLang: string): Promise<TranslateOutcome> {
   const key = await getKey();
   const timestamp = String(Date.now());
 
@@ -167,9 +174,15 @@ async function translateOne(text: string, targetLang: string): Promise<string> {
 
   // translateResult 按句分组，组内再按片段切开。换行由有道自己留在 tgt 里，
   // 这里只管顺序拼接，不要再补分隔符，否则多行文本会多出空行。
-  return response.translateResult
-    .map(group => group.map(item => item.tgt).join(''))
-    .join('');
+  const flat = response.translateResult.flat();
+  return {
+    text: flat.map(item => item.tgt).join(''),
+    src: flat.map(item => item.src).join(''),
+  };
+}
+
+function normalize(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 export async function translateWithYoudao(
@@ -184,18 +197,27 @@ export async function translateWithYoudao(
   const batched = await mapBatchesConcurrent<string>(
     texts, BATCH_SIZE, MAX_CONCURRENCY,
     async (batch) => {
-      if (batch.length === 1) return [await translateOne(batch[0], to)];
+      if (batch.length === 1) return [(await translateOne(batch[0], to)).text];
 
       // 拼成一次请求前先把块内换行压平，否则一个块占多行，回来按行拆就对不上了。
-      const joined = batch.map(text => text.replace(/\s*\n\s*/g, ' ')).join('\n');
-      const lines = (await translateOne(joined, to)).split('\n');
-      if (lines.length === batch.length) return lines;
+      const sent = batch.map(text => text.replace(/\s*\n\s*/g, ' '));
+      const outcome = await translateOne(sent.join('\n'), to);
+      const lines = outcome.text.split('\n');
+      const echoed = outcome.src.split('\n');
+
+      // 只比行数不够：有道偶尔会把两行并成一句或把一句拆成两行，行数照样对得上，
+      // 译文却整体错位一格。拿接口回显的原文逐行核对，对不上就别用这一批。
+      const aligned =
+        lines.length === batch.length &&
+        echoed.length === batch.length &&
+        echoed.every((line, i) => normalize(line) === normalize(sent[i]));
+      if (aligned) return lines;
 
       console.warn(
-        `[Youdao] 合并批次行数对不上（发出 ${batch.length} 行，回来 ${lines.length} 行），改为逐条翻译`
+        `[Youdao] 合并批次对不上（发出 ${batch.length} 行，回来 ${lines.length} 行/${echoed.length} 段原文），改为逐条翻译`
       );
       const one: string[] = [];
-      for (const text of batch) one.push(await translateOne(text, to));
+      for (const text of batch) one.push((await translateOne(text, to)).text);
       return one;
     },
     (err, batch) => {

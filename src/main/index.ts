@@ -351,8 +351,13 @@ async function handleTranslate() {
       hideLoading(); cleanup(screenshotPath); return;
     }
 
+    const paragraphs = groupIntoParagraphs(blocksToTranslate);
+    if (paragraphs.length !== blocksToTranslate.length) {
+      debugLog(`按版面并段：${blocksToTranslate.length} 行 → ${paragraphs.length} 段`);
+    }
+
     // Translate
-    console.log(`[translate] ${blocksToTranslate.length} blocks via ${config.provider}...`);
+    console.log(`[translate] ${paragraphs.length} blocks via ${config.provider}...`);
     let tp = 45;
     activeProgressTimer = setInterval(() => {
       if (tp < 95) {
@@ -361,13 +366,17 @@ async function handleTranslate() {
         showLoading(t('translatingPct', { n: Math.floor(tp) }));
       }
     }, 400);
-    const texts = blocksToTranslate.map(b => b.text);
+    const texts = paragraphs.map(b => b.text);
     const translations = await translate(texts, targetLang, config);
-    debugLog(`翻译回来 ${translations.length} 条，头几条: ${translations.slice(0, 3).join(' | ')}`);
+    debugLog(`翻译回来 ${translations.length} 条`);
+    paragraphs.forEach((b, i) => debugLog(
+      `  [${i}] ${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}x${Math.round(b.height)} ${b.lineCount}行\n` +
+      `      原: ${b.text}\n      译: ${translations[i] ?? ''}`
+    ));
     if (activeProgressTimer) { clearInterval(activeProgressTimer); activeProgressTimer = null; }
     if (isCancelled) { cleanup(screenshotPath); return; }
 
-    const translatedBlocks = blocksToTranslate.map((block, i) => ({
+    const translatedBlocks = paragraphs.map((block, i) => ({
       ...block,
       translated: translations[i] || block.text,
     }));
@@ -444,6 +453,146 @@ function filterForeignBlocks(blocks: TextBlock[], targetLang: string): TextBlock
     return true;
   });
 }
+
+/// 一段话的每一行分别送去翻译，翻译器看不到上下文，"Plan usage limits" 会被当成
+/// 祈使句译成"规划使用限制"；断句还常常跨行，译文就更乱。所以翻译前先按版面把
+/// 连续的行并成段：整段一次翻译，再整段贴回去。
+/// 同一段的判定：行距不超过一行高、左边缘对齐、字号接近、水平范围有重叠。
+export interface ParagraphBlock extends TextBlock {
+  /// 段内代表行高，渲染时按它定字号
+  lineHeight: number;
+  /// 段内原有几行，1 就是普通单行块
+  lineCount: number;
+}
+
+function groupIntoParagraphs(blocks: TextBlock[]): ParagraphBlock[] {
+  return dropSwallowed(groupLinesIntoParagraphs(clusterIntoLines(blocks)));
+}
+
+/// 象限重叠处偶尔会多出一小块（"are only" 这种半截），它整个落在某个段落的框里，
+/// 画上去就是一团压在段落上的字。被大块几乎整个包住的小块直接丢掉。
+/// 只丢"几乎完全被包住"的，普通的相邻、部分交叠一律保留——上一版按交叠面积丢，
+/// 结果把同一段里的行也丢了，整段少了半截。
+function dropSwallowed(paragraphs: ParagraphBlock[]): ParagraphBlock[] {
+  return paragraphs.filter((b, i) =>
+    !paragraphs.some((other, j) => {
+      if (i === j) return false;
+      // 只针对"多行段落里混进来的单行小碎片"，别的情况一律不动
+      if (b.lineCount > 1 || other.lineCount < 2) return false;
+      if (b.text.trim().length > 30) return false;
+      const bArea = b.width * b.height;
+      const otherArea = other.width * other.height;
+      if (otherArea <= bArea) return false;
+      const ix = Math.max(0, Math.min(b.x + b.width, other.x + other.width) - Math.max(b.x, other.x));
+      const iy = Math.max(0, Math.min(b.y + b.height, other.y + other.height) - Math.max(b.y, other.y));
+      return bArea > 0 && (ix * iy) / bArea > 0.6;
+    })
+  );
+}
+
+/// 第一步：把块并成"行"。OCR 常把一行切成好几段（图标、缩进、列对齐都会切），
+/// 这些块垂直中心几乎一样，按中心聚类再按 x 拼起来，就还原成一整行。
+function clusterIntoLines(blocks: TextBlock[]): TextBlock[] {
+  const sorted = [...blocks].sort((a, b) => (a.y + a.height / 2) - (b.y + b.height / 2));
+  const lines: TextBlock[][] = [];
+
+  for (const b of sorted) {
+    const center = b.y + b.height / 2;
+    const line = lines[lines.length - 1];
+    if (line) {
+      const ref = line[0];
+      const refCenter = ref.y + ref.height / 2;
+      const sameLine = Math.abs(center - refCenter) < Math.max(ref.height, b.height) * 0.6;
+      // 只有紧挨着的才算同一行。放宽了会把右边那一列（"89% used"）、
+      // 甚至旁边另一个窗口里同一水平线上的字，一起拼进这一行。
+      // 间距要按两边都算：新块可能落在行的左边，只看 b.x - 右边界 会得到负数，
+      // 那样任何距离都算"紧挨着"，半个屏幕外的字也会被拼进来。
+      const lineLeft = Math.min(...line.map(x => x.x));
+      const lineRight = Math.max(...line.map(x => x.x + x.width));
+      const gapX = Math.max(b.x - lineRight, lineLeft - (b.x + b.width));
+      const near = gapX < Math.max(ref.height, b.height) * 1.2;
+      // 上下必须真的压在一条线上，避免把斜着挨近的块拉进来
+      const overlapY = Math.min(b.y + b.height, ref.y + ref.height) - Math.max(b.y, ref.y);
+      const overlapOk = overlapY > Math.min(b.height, ref.height) * 0.5;
+      if (sameLine && near && overlapOk) { line.push(b); continue; }
+    }
+    lines.push([b]);
+  }
+
+  return lines.map(line => {
+    const parts = [...line].sort((a, b) => a.x - b.x);
+    const x = Math.min(...parts.map(b => b.x));
+    const y = Math.min(...parts.map(b => b.y));
+    const right = Math.max(...parts.map(b => b.x + b.width));
+    const bottom = Math.max(...parts.map(b => b.y + b.height));
+    return {
+      text: joinLines(parts.map(b => b.text)),
+      confidence: Math.min(...parts.map(b => b.confidence)),
+      x, y, width: right - x, height: bottom - y,
+    };
+  });
+}
+
+/// 第二步：把行并成"段"。行距不超过一行高、左边缘对齐、字号接近就算同一段。
+function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
+  const sorted = [...lines].sort((a, b) => (a.y - b.y) || (a.x - b.x));
+  const out: ParagraphBlock[] = [];
+  let group: TextBlock[] = [];
+
+  const flush = () => {
+    if (!group.length) return;
+    const x = Math.min(...group.map(b => b.x));
+    const y = Math.min(...group.map(b => b.y));
+    const right = Math.max(...group.map(b => b.x + b.width));
+    const bottom = Math.max(...group.map(b => b.y + b.height));
+    out.push({
+      text: joinLines(group.map(b => b.text)),
+      confidence: Math.min(...group.map(b => b.confidence)),
+      x, y, width: right - x, height: bottom - y,
+      lineHeight: Math.max(...group.map(b => b.height)),
+      lineCount: group.length,
+    });
+    group = [];
+  };
+
+  for (const line of sorted) {
+    const last = group[group.length - 1];
+    if (!last) { group.push(line); continue; }
+    const gap = line.y - (last.y + last.height);
+    const sizeOk = line.height <= last.height * 1.5 && line.height >= last.height * 0.66;
+    const leftOk = Math.abs(line.x - last.x) <= last.height * 1.5;
+    if (gap <= last.height * 0.9 && sizeOk && leftOk) group.push(line);
+    else { flush(); group.push(line); }
+  }
+  flush();
+  return out;
+}
+
+/// 行尾断词（"perma-" + "nent"）接回去，中文之间不要空格，其余按空格拼。
+/// 拼之前还要去掉重复：象限重叠处同一行常被识别两次，两块文字首尾是重的
+/// （"...usage credits. Credits" + "Credits never expire..."），直接拼会拼出
+/// "信用使用信用" 这种车轱辘话。
+function joinLines(lines: string[]): string {
+  return lines.reduce((acc, line) => appendPart(acc, line.trim()), '');
+}
+
+function appendPart(acc: string, part: string): string {
+  if (!part) return acc;
+  if (!acc) return part;
+  if (acc.endsWith(part) || acc.includes(part)) return acc;
+
+  // 后一块的开头和前面已拼内容的结尾重了多少，就从那里接上
+  const max = Math.min(acc.length, part.length);
+  for (let n = max; n >= 4; n--) {
+    if (acc.slice(-n) === part.slice(0, n)) return acc + part.slice(n);
+  }
+
+  if (/[A-Za-z]-$/.test(acc)) return acc.slice(0, -1) + part;
+  const cjkTail = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]$/.test(acc);
+  const cjkHead = /^[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(part);
+  return acc + (cjkTail && cjkHead ? '' : ' ') + part;
+}
+
 
 function rectOverlapRatio(a: {x:number,y:number,width:number,height:number}, b: {x:number,y:number,width:number,height:number}): number {
   const ix = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
@@ -564,9 +713,14 @@ function refineWithAccessibility(
 function textSimilarity(a: string, b: string): number {
   const la = a.trim().toLowerCase();
   const lb = b.trim().toLowerCase();
+  if (!la || !lb) return 0;
   if (la === lb) return 1;
-  if (la.includes(lb) || lb.includes(la)) return 0.8;
-  // Check word overlap
+  // 光看"谁包含谁"会让 "Usage" 冒充 "Usage limits"，AX 就把另一个元素的文本和坐标
+  // 套到这一块上，译文贴到别处去。短的那个至少要占长的一多半才算同一个元素。
+  if (la.includes(lb) || lb.includes(la)) {
+    const ratio = Math.min(la.length, lb.length) / Math.max(la.length, lb.length);
+    return ratio >= 0.6 ? 0.6 + ratio * 0.3 : ratio * 0.5;
+  }
   const wordsA = new Set(la.split(/\s+/));
   const wordsB = new Set(lb.split(/\s+/));
   let overlap = 0;
@@ -628,10 +782,11 @@ async function handleRegionTranslate() {
     }
 
     showLoading(t('translatingPct', { n: 70 }));
-    const texts = blocksToTranslate.map(b => b.text);
+    const paragraphs = groupIntoParagraphs(blocksToTranslate);
+    const texts = paragraphs.map(b => b.text);
     const translations = await translate(texts, targetLang, config);
 
-    const translatedBlocks = blocksToTranslate.map((block, i) => ({
+    const translatedBlocks = paragraphs.map((block, i) => ({
       ...block,
       translated: translations[i] || block.text,
     }));
