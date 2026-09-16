@@ -37,13 +37,14 @@ export function setOverlayVisibleFn(fn: () => boolean) {
   isOverlayVisibleFn = fn;
 }
 
+/// 菜单栏图标：32x32 的鹦鹉剪影，按 2x 载入，也就是 16pt。
 const TRAY_ICON_BASE64 =
-  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAABL0lEQVR4nIXTzSpFURQH8N+5xEgMCIUXUJRiYOIpGBl5BOUZlBGlEE8gA+Q1KFMDBkquyRXK9zkG1mW33Ztdu/X9X+u/1zm0PkWi92Ig83W2qQO1kFM4xh1ecYVtjP5XXGAE96hwiwXsoYELLKGrFUBztPko/sB++EawgTJiR61AmuNP4C2Sn7GDE+yG7y1A5nKAIm5vjF4l9x2bif6ByVoGUIuEVQziM/zvEXvFU1A9wHneHfr8PmCZyDKmOsNh5KWr1RFyOitOKVRYTOnmFFKg/DTp3YTegSoFKENe4iU6VBlAgXpCqW33rUh4SZJLPGAooSCdoEjsnrC7/T5U4Xsr920o/hSvxOh13x/PY9gNrKfd8+ICy5F8jZmIDWMc/f91nsUp1jAWvvy3/bO1Lz7oVlfqu2r9AAAAAElFTkSuQmCC';
+  'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAACshmLzAAACXklEQVRYCe2WzUuVQRSHb5pmWZkIQQtLpaJAS0EJy0WL2gRtxKA2tar+gqJW7ULEIip0pxsFo437iCgILaIPihQkSRcVEYnRB5Wiz6/eV6Zp3nvPvV5pkT94mDNnzpz5eu/cSaWWtbwD/3gHCvM0fg15muEgbIY5+BiVFEunClKfg2nQoDE/sa9AJSyZisjcD/Ggbjkb+Ycom2Aj5F1HyegOKnsKTsFWuAwz8AEmoQOqIC8qIcsA+BO4g09tkr6FcXBjHlLX5BZUsGBlZ2wgfE+gyzp86yO/tn2VF6PjuAorPX9W1VKi98I3cFcnW2d/E07CMPjtP/DdA30/v7QiNjKUimuDw7AFtLpq8FeIK6hLeB/DW2iBTtACTNpGVB+EVuyvMFT/St+GaKQqyi5YHdUzFjrnUQgltvom6H8MWmEQDoBJ2uYHYB3Ij9N534U3oHO/DvvArBNE+kmtdZ33ISiGtRFZXfv60m+BdUA/7jx9TUq6BzSBelOGcFBj2P23N2kCuih02eSqcmvHpAnoQvlsTRKIM/dNmsAXkj4NJLa6nlkD08WdptH/uCx1rb42XWK3LWkHFPMKzNelk7QH+4VTz8lspNdLsKzYjdHf7aacRnQ66W03BnFiPSgeOfXY75baqWuwHRalGno/hzj5CPZ+KINekF/vv/fwDvQCku8MpDtOmjNLv333lXOb+k6n21lsDdYOutN1TBdAPvPNR+wf0qCxjmMcgSfQDTfgE8TST1N6DfdloLrfRep7VOZcaCIXQS+ZNQlZduHvh91O+w7sPtBuLEpF9Nar5//TPLtY4BGlHCFYAAAAAElFTkSuQmCC';
 
 export function createTray() {
-  const icon = nativeImage.createFromDataURL(`data:image/png;base64,${TRAY_ICON_BASE64}`);
+  // 按 2x 载入，Retina 上是 16pt 的清晰剪影；template image 由 macOS 自动适配明暗模式
+  const icon = nativeImage.createFromBuffer(Buffer.from(TRAY_ICON_BASE64, 'base64'), { scaleFactor: 2 });
   icon.setTemplateImage(true);
-  // 牡丹鹦鹉剪影，template image 由 macOS 自动适配明暗模式
 
   tray = new Tray(icon);
   tray.setToolTip('TTY');
