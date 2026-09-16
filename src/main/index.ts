@@ -31,6 +31,9 @@ let activeProgressTimer: ReturnType<typeof setInterval> | null = null;
 // monitor accepted can be dropped here and the two state machines drift apart.
 const DEBOUNCE_MS = 1000;
 
+/// 这几档不需要 API Key，启动时别拿"没填 Key"当理由弹设置窗。
+const FREE_PROVIDERS = ['google', 'youdao', 'ollama'];
+
 // Tray app: don't quit when all windows are closed
 app.on('window-all-closed', () => {
   // Do nothing — keep running in tray
@@ -251,9 +254,9 @@ app.whenReady().then(() => {
     `TTY started. Hotkey: ${config.hotkey} ` +
     `(backend: ${getHotkeyBackend()}${getHotkeyBackend() === 'global' ? ', no permission needed' : ', needs Input Monitoring'})`
   );
-  // Google is free, no API key needed. Only show settings if using a paid provider without key.
+  // 免费的几档不需要 API Key；只有选了要付费的服务却没填 Key 时才弹设置窗。
   const providerConf = config.providers[config.provider];
-  if (!providerConf?.apiKey && !['google', 'ollama'].includes(config.provider)) {
+  if (!providerConf?.apiKey && !FREE_PROVIDERS.includes(config.provider)) {
     openSettings();
   }
 
