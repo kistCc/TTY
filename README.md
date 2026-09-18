@@ -7,7 +7,7 @@
 <p align="center"><strong>贴图翻译 · macOS 屏幕翻译工具 · 全屏翻译 · 选区翻译 · 像素级原位覆盖</strong></p>
 
 <p align="center">
-  <a href="https://github.com/kistCc/TTY/releases/latest"><img src="https://img.shields.io/badge/Release-v1.3.1-blue?style=flat" alt="Release"></a>
+  <a href="https://github.com/kistCc/TTY/releases/latest"><img src="https://img.shields.io/badge/Release-v1.3.3-blue?style=flat" alt="Release"></a>
   <a href="https://github.com/kistCc/TTY/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey?style=flat" alt="macOS">
   <img src="https://img.shields.io/badge/Electron-33-47848f?style=flat" alt="Electron">
@@ -26,7 +26,7 @@
 上游作者 **[@Archer-SQ](https://github.com/Archer-SQ)**，原项目以 MIT 许可证发布。
 截图、OCR、翻译、像素级原位覆盖这套核心设计全部来自上游，在此致谢。
 
-本仓库基于上游 v1.2.3，当前版本 v1.3.1。主要改动：
+本仓库基于上游 v1.2.3，当前版本 v1.3.3。主要改动：
 
 | 改动 | 说明 |
 |---|---|
@@ -41,6 +41,9 @@
 | **启动不打扰** | 只驻留菜单栏，仅首次安装弹一次设置窗；可设为开机自启 |
 | **全屏翻译提速** | 翻译批次并发、翻译前按文本去重、OCR 切图改用 JPEG |
 | **有道翻译** | 新增一档免费翻译服务，不需要 API Key；一屏的文本块合并成一次请求发出、按行拆回，行数对不上时自动退回逐条翻译 |
+| **整段翻译整段覆盖** | 全屏翻译不再一行一译一贴：识别出的文本块先按垂直中心聚成行、再按行距/左边缘/字号并成段，整段一次送去翻译、整段折行贴回，句子不会再从中间断开 |
+| **盖得住原文** | 并段前的原始文本框一律先按背景色擦掉，译文比原文短也不会露出半截英文；字号跟着原文走，但限制在整屏行高的 0.6～1.8 倍之间，不会出现巨型字或蚂蚁字 |
+| **挡掉 OCR 的坏块** | 跨行糊在一起的复合框、半个字高的残框、压在正常块上的低置信度框，翻出来必是乱码，识别阶段就丢掉 |
 
 完整改动见 commit 历史；第一个 commit 是上游 v1.2.3 的原始状态，可直接 diff。
 
@@ -56,6 +59,17 @@
 
 > 快捷键可在设置里改。用普通组合键（修饰键 + 一个键）**不需要任何系统权限**；
 > 若改成 `Shift+Z+X` 这类和弦，则需要授予「输入监控」。
+
+### 实际效果
+
+按一下 `⌥⌘T`，整屏英文原位变中文——段落整段翻译、整段折行贴回原来的位置，排版不变：
+
+| 翻译前 | 翻译后 |
+|---|---|
+| ![翻译前](docs/demo-before.png) | ![翻译后](docs/demo-after.png) |
+
+> 图中第三段中间那条空白是故意的：那一行 OCR 只认出半个字高、内容已经是乱码，
+> 与其贴一行错字，不如把原文盖掉留白。
 
 ## 特性
 
@@ -73,7 +87,7 @@
 - **常驻置顶** — 可覆盖全屏应用
 
 ### OCR & 翻译
-- **2x2 象限分割 OCR** — 大屏截图切成 4 个重叠象限并行 OCR，精度更高
+- **整屏识别 + 版面重建** — 整屏一次 OCR，再按行距/左边缘/字号把文本块还原成段落，整段翻译整段覆盖
 - **对比度增强预处理** — Core Image 改善低对比度文字（终端、dim UI）
 - **Vision Revision 3** — 使用 macOS 最新 OCR 模型
 - **多引擎** — Google（免费）/ 有道（免费）/ OpenAI / Anthropic / DeepL / Ollama
@@ -150,10 +164,10 @@ npm run dist
 ## 工作原理
 
 ```
-快捷键 → 截屏 → OCR + AX 并行识别 → 过滤 → 分批翻译 → Canvas 绘制覆盖
+快捷键 → 截屏 → OCR + AX 并行识别 → 过滤坏块 → 聚行并段 → 分批翻译 → Canvas 擦除原文并绘制译文
 ```
 
-**全屏翻译**：截整屏 → 2x2 象限分割 OCR → 合并去重 → 按行翻译 → 覆盖层渲染
+**全屏翻译**：截整屏 → 整屏 OCR → 剔除坏块 → 聚行并段 → 整段翻译 → 覆盖层擦除原文并折行绘制
 
 **选区翻译**：先冻结整屏截图 → 弹出半透明选框 → 用户拖拽 → 裁剪截图 → OCR → 翻译 → 可拖拽可缩放的独立结果窗口
 
@@ -169,7 +183,7 @@ npm run dist
 src/main/                主进程（TypeScript）
   index.ts               翻译流程编排
   screenshot.ts          区域截图（screencapture -R）
-  ocr.ts                 调用 OCR 二进制 + 2x2 象限分割
+  ocr.ts                 调用 OCR 二进制（整屏识别）
   accessibility.ts       AX API 包装
   translator.ts          翻译服务调度（含文本去重）
   batch.ts               批次切分与并发调度
@@ -205,3 +219,11 @@ MIT
 - [google-translate-api-x](https://github.com/AidanWelch/google-translate-api) — 免费 Google 翻译
 - [Electron](https://www.electronjs.org/) — 桌面应用框架
 - Apple Vision Framework — 原生 OCR
+
+## 贡献者
+
+| | |
+|---|---|
+| [@kistCc](https://github.com/kistCc) | 本分支维护 |
+| [@Archer-SQ](https://github.com/Archer-SQ) | 上游 [screen-translator](https://github.com/Archer-SQ/screen-translator) 作者 |
+| [Claude](https://claude.com/claude-code)（Anthropic） | v1.3.x 的有道翻译接入、全屏整段翻译重构、图标与文档，由 Claude 结对完成 |

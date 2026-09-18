@@ -43,6 +43,10 @@ window.api.onShowTranslation((data) => {
     const sortedLineH = px.map(p => p.lineH).filter(h => h > 0).sort((a, b) => a - b);
     const medianLineH = sortedLineH.length ? sortedLineH[Math.floor(sortedLineH.length / 2)] : 0;
     const maxLineH = medianLineH ? medianLineH * 1.8 : Infinity;
+    // 同样也要兜一个下限。OCR 偶尔把一行只认出半个字高，照它定字号就是一行
+    // 小得看不清的字挤在正文中间。字号仍然跟着原文走（标题还是比正文大），
+    // 只是限制在整屏行高的一个合理区间里。
+    const minLineH = medianLineH ? medianLineH * 0.6 : 0;
 
     // 先按"并段之前的原始块"把原文统统擦掉。没并进任何段落的碎块不会画译文，
     // 不擦的话它那块英文就留在屏幕上了。
@@ -67,7 +71,8 @@ window.api.onShowTranslation((data) => {
       const isBold = baseH > 44;
       const weight = isBold ? 'bold' : 'normal';
       const fontFamily = '-apple-system, "PingFang SC", "Hiragino Sans GB", sans-serif';
-      const originalFontSize = Math.round(Math.min(baseH, maxLineH) * FONT_HEIGHT_RATIO);
+      const clampedH = Math.min(Math.max(baseH, minLineH), maxLineH);
+      const originalFontSize = Math.round(clampedH * FONT_HEIGHT_RATIO);
 
       const minFontSize = Math.max(10, Math.floor(originalFontSize * MIN_FONT_RATIO));
       let fontSize = originalFontSize;

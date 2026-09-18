@@ -199,6 +199,9 @@ export function showOverlay(data: OverlayData) {
   }
 
   const send = () => {
+    // 每次都把浮层拉回整屏：用户拖过、缩放过之后，窗口会记着上次的位置和大小，
+    // 下一次全屏翻译就会盖不满，露出底下窗口的边。
+    if (data.displayBounds) win.setBounds(data.displayBounds);
     win.webContents.send('show-translation', { ...data, screenshotDataUrl });
     win.showInactive();
     hideLoading();

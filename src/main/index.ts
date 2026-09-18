@@ -352,7 +352,7 @@ async function handleTranslate() {
       hideLoading(); cleanup(screenshotPath); return;
     }
 
-    const paragraphs = groupIntoParagraphs(dropOversizedBoxes(blocksToTranslate), display.bounds.width);
+    const paragraphs = groupIntoParagraphs(dropDuplicateBoxes(dropLowConfidenceOverlaps(dropUndersizedBoxes(dropOversizedBoxes(blocksToTranslate)))), display.bounds.width);
     if (paragraphs.length !== blocksToTranslate.length) {
       debugLog(`按版面并段：${blocksToTranslate.length} 行 → ${paragraphs.length} 段`);
     }
@@ -507,14 +507,18 @@ function dropSwallowed(paragraphs: ParagraphBlock[]): ParagraphBlock[] {
 function clusterIntoLines(blocks: TextBlock[], screenWidth: number): TextBlock[] {
   const sorted = [...blocks].sort((a, b) => (a.y + a.height / 2) - (b.y + b.height / 2));
   const rows: TextBlock[][] = [];
+  // 容差要用整屏行高的中位数封顶。直接拿两个框里高的那个算，只要 OCR 吐出一个
+  // 跨两行的高框，容差就大过一整行行距，隔壁行会被吸进同一行，左右一串就是
+  // "their vertical center, L he ter, soreandrome tot size" 这种乱码。
+  const medianH = medianHeight(blocks);
 
   for (const b of sorted) {
     const center = b.y + b.height / 2;
     const row = rows[rows.length - 1];
     if (row) {
       const refCenter = row[0].y + row[0].height / 2;
-      const tolerance = Math.max(row[0].height, b.height) * 0.55;
-      if (Math.abs(center - refCenter) < tolerance) { row.push(b); continue; }
+      const ref = Math.min(Math.max(row[0].height, b.height), medianH * 1.2);
+      if (Math.abs(center - refCenter) < ref * 0.55) { row.push(b); continue; }
     }
     rows.push([b]);
   }
@@ -567,38 +571,100 @@ function medianHeight(lines: TextBlock[]): number {
 /// 第二步：把行并成"段"。行距不超过一行高、左边缘对齐、字号接近就算同一段。
 function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
   const sorted = [...lines].sort((a, b) => (a.y - b.y) || (a.x - b.x));
-  const out: ParagraphBlock[] = [];
-  let group: TextBlock[] = [];
+  // 同一时刻允许有好几个没写完的段。整屏上左边是正文、右边是另一个窗口，
+  // 两边的行按 y 交替到达；只留一个"当前段"的话，右边来一行就把左边的段截断，
+  // 正文第一行会被单独剩下。每来一行先找一个最贴合的段接上去，找不到才另起一段。
+  const groups: TextBlock[][] = [];
 
-  const flush = () => {
-    if (!group.length) return;
+  for (const line of sorted) {
+    let bestIdx = -1;
+    let bestPitch = Infinity;
+    for (let i = 0; i < groups.length; i++) {
+      const last = groups[i][groups[i].length - 1];
+      // 用"行距"（两行中心的距离）判断，不用"框之间的空当"。密排正文里字框几乎贴着，
+      // 空当本来就接近 0，空一行也才多出半个字高——按空当判会把标题和下一段吸进上一段。
+      // 行距则很干脆：同段约等于一倍行高，空一行直接翻倍。
+      const pitch = (line.y + line.height / 2) - (last.y + last.height / 2);
+      if (pitch < 0 || pitch > Math.max(last.height, line.height) * 1.45) continue;
+      if (line.height > last.height * 1.5 || line.height < last.height * 0.66) continue;
+      if (Math.abs(line.x - last.x) > last.height * 1.5) continue;
+      if (pitch < bestPitch) { bestPitch = pitch; bestIdx = i; }
+    }
+    if (bestIdx >= 0) groups[bestIdx].push(line);
+    else groups.push([line]);
+  }
+
+  return groups.map(group => {
     const x = Math.min(...group.map(b => b.x));
     const y = Math.min(...group.map(b => b.y));
     const right = Math.max(...group.map(b => b.x + b.width));
     const bottom = Math.max(...group.map(b => b.y + b.height));
-    out.push({
+    return {
       text: joinLines(group.map(b => b.text)),
       confidence: Math.min(...group.map(b => b.confidence)),
       x, y, width: right - x, height: bottom - y,
       lineHeight: medianHeight(group),
       lineCount: group.length,
-    });
-    group = [];
-  };
-
-  for (const line of sorted) {
-    const last = group[group.length - 1];
-    if (!last) { group.push(line); continue; }
-    const gap = line.y - (last.y + last.height);
-    const sizeOk = line.height <= last.height * 1.5 && line.height >= last.height * 0.66;
-    const leftOk = Math.abs(line.x - last.x) <= last.height * 1.5;
-    if (gap <= last.height * 0.9 && sizeOk && leftOk) group.push(line);
-    else { flush(); group.push(line); }
-  }
-  flush();
-  return out;
+    };
+  });
 }
 
+
+/// Vision 偶尔会把一行只认出半个字高——框高只有整屏行高中位数的一半，
+/// 认出来的字也跟着缺一半：reflow it, measure it, or translate it ... 会变成
+/// "ret low 1t. measure lt. or translate lt as a sınole unıt ratner tan quessına"。
+/// 这种半高框翻出来必然是乱码，贴上去比留着原文更难看，直接丢掉。
+/// 阈值取整屏行高中位数的 0.6 倍：正常的小字号说明文字不会小到正文的六成以下，
+/// 真掉了一两块小字也比贴一行乱码强。渲染层还另有一个字号下限兜底。
+function dropUndersizedBoxes(blocks: TextBlock[]): TextBlock[] {
+  if (blocks.length < 6) return blocks;
+  const median = medianHeight(blocks);
+  return blocks.filter(b => b.height >= median * 0.6);
+}
+
+/// OCR 对同一片像素偶尔会多吐一个"糊在一起"的框：字是错的、高度跨了两行，
+/// 置信度也明显低于旁边的正常块（实测 0.5 对 1.0）。它和正常块叠在一起，
+/// 一行串下来就是 "their vertical center, L he ter, soreandrome tot size" 这种乱码。
+/// 判据：置信度偏低，而且压在一个高置信度的块上——正常版面里文字框互不重叠，
+/// 所以不会误伤真正认得出的低置信度文字（那种一般是孤立的小字）。
+function dropLowConfidenceOverlaps(blocks: TextBlock[]): TextBlock[] {
+  return blocks.filter(b => {
+    if (b.confidence >= 0.7) return true;
+    const bArea = b.width * b.height;
+    if (bArea <= 0) return true;
+    return !blocks.some(other => {
+      if (other === b || other.confidence < 0.9) return false;
+      const ix = Math.max(0, Math.min(b.x + b.width, other.x + other.width) - Math.max(b.x, other.x));
+      const iy = Math.max(0, Math.min(b.y + b.height, other.y + other.height) - Math.max(b.y, other.y));
+      return ix > 0 && iy > 0 && (ix * iy) / bArea > 0.2;
+    });
+  });
+}
+
+/// OCR 有时会对同一片像素给出好几个互相重叠的框：一个把两三行糊在一起、还认错不少字，
+/// 旁边又有每行各自的正常框。两种都留着，串起来就是
+/// "their vertical center, L he ter, soreandrome tot size" 这样的乱码。
+/// 判据：一个框六成以上的面积被"更可信的框"盖住，就丢掉它。
+/// 更可信 = 置信度更高，或者置信度相当但明显更矮（更像单行，而不是糊在一起的复合框）。
+/// 正常版面里文字框互不重叠，所以这条不会误伤。
+function dropDuplicateBoxes(blocks: TextBlock[]): TextBlock[] {
+  if (blocks.length < 2) return blocks;
+  return blocks.filter(b => {
+    const bArea = b.width * b.height;
+    if (bArea <= 0) return true;
+    let covered = 0;
+    for (const other of blocks) {
+      if (other === b) continue;
+      const ix = Math.max(0, Math.min(b.x + b.width, other.x + other.width) - Math.max(b.x, other.x));
+      const iy = Math.max(0, Math.min(b.y + b.height, other.y + other.height) - Math.max(b.y, other.y));
+      if (ix <= 0 || iy <= 0) continue;
+      const better = other.confidence > b.confidence + 0.02
+        || (Math.abs(other.confidence - b.confidence) <= 0.02 && other.height < b.height * 0.8);
+      if (better) covered += ix * iy;
+    }
+    return covered / bArea < 0.6;
+  });
+}
 
 /// OCR 偶尔会给一整段吐一个跨好几行的大框，里面的文字是几行糊在一起的，
 /// 常常还认错字。这种框和正常行块压在一起，翻出来就是一团盖住段落的乱码。
@@ -608,11 +674,18 @@ function dropOversizedBoxes(blocks: TextBlock[]): TextBlock[] {
   if (blocks.length < 4) return blocks;
   const heights = blocks.map(b => b.height).sort((a, b) => a - b);
   const median = heights[Math.floor(heights.length / 2)];
-  const limit = median * 2.2;
+  const limit = median * 1.7;
 
   return blocks.filter(b => {
     if (b.height <= limit) return true;
-    return !blocks.some(other => other !== b && rectOverlapRatio(b, other) > 0.5);
+    const bText = b.text.replace(/\s+/g, ' ').trim();
+    return !blocks.some(other => {
+      if (other === b) return false;
+      if (rectOverlapRatio(b, other) > 0.5) return true;
+      // 内容判据：这个大框把别的块的整句都吞了进去，说明它是几行糊在一起的复合框
+      const otherText = other.text.replace(/\s+/g, ' ').trim();
+      return otherText.length >= 12 && bText.includes(otherText);
+    });
   });
 }
 
