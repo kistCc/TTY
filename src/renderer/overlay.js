@@ -38,6 +38,25 @@ window.api.onShowTranslation((data) => {
     }));
     const rowMetrics = clusterRowsAndGetHeights(px);
 
+    // OCR 偶尔会吐出一个跨好几行的大框，照它的高度定字号就是一坨大字压在别人身上。
+    // 用整屏行高的中位数兜一个上限，异常的框会被压回正常字号。
+    const sortedLineH = px.map(p => p.lineH).filter(h => h > 0).sort((a, b) => a - b);
+    const medianLineH = sortedLineH.length ? sortedLineH[Math.floor(sortedLineH.length / 2)] : 0;
+    const maxLineH = medianLineH ? medianLineH * 1.8 : Infinity;
+
+    // 先按"并段之前的原始块"把原文统统擦掉。没并进任何段落的碎块不会画译文，
+    // 不擦的话它那块英文就留在屏幕上了。
+    const cleanCtxForErase = clean.getContext('2d');
+    (data.eraseRects || []).forEach(r => {
+      const x = Math.round(r.x * scaleX);
+      const y = Math.round(r.y * scaleY);
+      const w = Math.round(r.width * scaleX);
+      const h = Math.round(r.height * scaleY);
+      const bg = sampleEdgeColor(cleanCtxForErase, x, y, w, h);
+      ctx.fillStyle = `rgb(${bg.r},${bg.g},${bg.b})`;
+      ctx.fillRect(x - ERASE_PAD, y - ERASE_PAD, w + ERASE_PAD * 2, h + ERASE_PAD * 2);
+    });
+
     px.forEach((p, i) => {
       const { block, x, y, w, h } = p;
       // Use the row's representative height for font sizing — same row → same font size
@@ -48,7 +67,7 @@ window.api.onShowTranslation((data) => {
       const isBold = baseH > 44;
       const weight = isBold ? 'bold' : 'normal';
       const fontFamily = '-apple-system, "PingFang SC", "Hiragino Sans GB", sans-serif';
-      const originalFontSize = Math.round(baseH * FONT_HEIGHT_RATIO);
+      const originalFontSize = Math.round(Math.min(baseH, maxLineH) * FONT_HEIGHT_RATIO);
 
       const minFontSize = Math.max(10, Math.floor(originalFontSize * MIN_FONT_RATIO));
       let fontSize = originalFontSize;

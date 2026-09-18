@@ -8,6 +8,7 @@ import { translateWithYoudao } from './providers/youdao';
 
 /// 产品名被硬翻出来最难看：Claude 成了"克劳德"、Claude Code 成了"克劳德代码"。
 /// 整块文本就是一个产品名时直接原样留着，连请求都不用发。
+/// 只认这张表里的名字——除了公司和产品名，其余英文一律要翻。
 const KEEP_AS_IS = new Set([
   'claude', 'claude code', 'cowork', 'anthropic', 'chatgpt', 'openai', 'gemini',
   'github', 'gitlab', 'notion', 'slack', 'figma', 'xcode', 'vs code', 'visual studio code',
@@ -20,10 +21,7 @@ const KEEP_AS_IS = new Set([
 function keepAsIs(text: string): boolean {
   const t = text.trim().replace(/[.:,;!?]+$/, '');
   if (!t) return true;
-  if (KEEP_AS_IS.has(t.toLowerCase())) return true;
-  // 纯大写缩写：API、OCR、URL、GPU……翻出来只会更难懂
-  if (/^[A-Z0-9]{2,6}$/.test(t)) return true;
-  return false;
+  return KEEP_AS_IS.has(t.toLowerCase());
 }
 
 

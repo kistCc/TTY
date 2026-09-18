@@ -11,6 +11,7 @@ import { getAccessibilityText, AXTextBlock } from './accessibility';
 import { translate } from './translator';
 import { getConfig, saveConfig, migrateConfig, applyLoginItem } from './config';
 import { debugLog } from './native';
+import { joinParts as joinLines } from './text-join';
 import { t } from './i18n';
 import { ensureOverlayWindow, showOverlay, hideOverlay, isOverlayVisible, showLoading, hideLoading, showCancelled, setDismissCallback, discardCurrentScreenshot } from './overlay';
 import { createTray, openSettings, setTranslateCallback, setHideCallback, setClearCacheCallback, setSelectionTranslateCallback, setClipboardTranslateCallback, setOverlayVisibleFn, updateTrayMenu } from './tray';
@@ -351,7 +352,7 @@ async function handleTranslate() {
       hideLoading(); cleanup(screenshotPath); return;
     }
 
-    const paragraphs = groupIntoParagraphs(blocksToTranslate);
+    const paragraphs = groupIntoParagraphs(dropOversizedBoxes(blocksToTranslate), display.bounds.width);
     if (paragraphs.length !== blocksToTranslate.length) {
       debugLog(`按版面并段：${blocksToTranslate.length} 行 → ${paragraphs.length} 段`);
     }
@@ -388,7 +389,14 @@ async function handleTranslate() {
     // Show — instant because window is pre-created
     // Don't cleanup screenshotPath here — renderer needs the file for background
     debugLog(`显示浮层，${translatedBlocks.length} 块`);
-    showOverlay({ screenshotPath, blocks: translatedBlocks, displayBounds: display.bounds });
+    // eraseRects 是并段之前的原始块：先按它们把原文全部擦掉，再画译文。
+    // 否则没并进任何段落的碎块会把英文留在屏幕上。
+    showOverlay({
+      screenshotPath,
+      blocks: translatedBlocks,
+      eraseRects: cssBlocks.map(b => ({ x: b.x, y: b.y, width: b.width, height: b.height })),
+      displayBounds: display.bounds,
+    });
     sendHotkeyState('SHOWN');
     updateTrayMenu();
   } catch (err: any) {
@@ -422,8 +430,9 @@ function filterForeignBlocks(blocks: TextBlock[], targetLang: string): TextBlock
 
   return blocks.filter(block => {
     const text = block.text.trim();
-    if (text.length <= 1) return false;
-    if (block.confidence < 0.15) return false;
+    if (!text) return false;
+    // 只挡掉 OCR 基本没看清的；宁可多翻一块，也别把英文留在屏幕上
+    if (block.confidence < 0.05) return false;
 
 
     if (/^[\d\s.,:;!?@#$%^&*()\-+=<>{}[\]|/\\~`'"•●○◆★☆✓✗→←↑↓©®™℃°…]+$/.test(text)) return false;
@@ -431,8 +440,8 @@ function filterForeignBlocks(blocks: TextBlock[], targetLang: string): TextBlock
     if (/^\.\w{1,4}$/.test(text)) return false;
     if (/^[0-9a-f]{6,}$/i.test(text)) return false;
     if (/^[\d.]+[KMGTkmgt]?[Bb]?\/s?$/.test(text)) return false;
-    const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(text);
-    if (text.length <= 2 && !hasCJK && !/[a-zA-Z]{2}/.test(text)) return false;
+    // 单个字母、单个符号翻了也没意义；两个字母以上一律翻
+    if (!/[a-zA-Z\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]{2}/.test(text)) return false;
 
     if (targetPrefix === 'zh') {
       const chineseChars = text.match(/[\u4e00-\u9fff]/g)?.length || 0;
@@ -465,8 +474,8 @@ export interface ParagraphBlock extends TextBlock {
   lineCount: number;
 }
 
-function groupIntoParagraphs(blocks: TextBlock[]): ParagraphBlock[] {
-  return dropSwallowed(groupLinesIntoParagraphs(clusterIntoLines(blocks)));
+function groupIntoParagraphs(blocks: TextBlock[], screenWidth: number): ParagraphBlock[] {
+  return dropSwallowed(groupLinesIntoParagraphs(clusterIntoLines(blocks, screenWidth)));
 }
 
 /// 象限重叠处偶尔会多出一小块（"are only" 这种半截），它整个落在某个段落的框里，
@@ -477,60 +486,82 @@ function dropSwallowed(paragraphs: ParagraphBlock[]): ParagraphBlock[] {
   return paragraphs.filter((b, i) =>
     !paragraphs.some((other, j) => {
       if (i === j) return false;
-      // 只针对"多行段落里混进来的单行小碎片"，别的情况一律不动
+      // 只针对"整个落在多行段落里的单行块"。这类要么是碎片，要么是 OCR 吐出的
+      // 跨行大框，内容都在段落里出现过，留着只会盖住段落。
       if (b.lineCount > 1 || other.lineCount < 2) return false;
-      if (b.text.trim().length > 30) return false;
       const bArea = b.width * b.height;
       const otherArea = other.width * other.height;
       if (otherArea <= bArea) return false;
       const ix = Math.max(0, Math.min(b.x + b.width, other.x + other.width) - Math.max(b.x, other.x));
       const iy = Math.max(0, Math.min(b.y + b.height, other.y + other.height) - Math.max(b.y, other.y));
-      return bArea > 0 && (ix * iy) / bArea > 0.6;
+      return bArea > 0 && (ix * iy) / bArea > 0.75;
     })
   );
 }
 
-/// 第一步：把块并成"行"。OCR 常把一行切成好几段（图标、缩进、列对齐都会切），
-/// 这些块垂直中心几乎一样，按中心聚类再按 x 拼起来，就还原成一整行。
-function clusterIntoLines(blocks: TextBlock[]): TextBlock[] {
+/// 第一步：把块并成"行"。OCR 会把一行切成好几段（短语之间的空当稍大就会切开），
+/// 这些块垂直中心几乎一样，先只按中心聚成行，行内再按 x 从左到右串起来。
+///
+/// 一定要先聚行、再按 x 排序：块到达的顺序是按垂直中心排的，行内前后乱序，
+/// 拿"新块到当前行右边界"的距离去判断远近会算出假的大间隔，一行就散成一堆碎块。
+function clusterIntoLines(blocks: TextBlock[], screenWidth: number): TextBlock[] {
   const sorted = [...blocks].sort((a, b) => (a.y + a.height / 2) - (b.y + b.height / 2));
-  const lines: TextBlock[][] = [];
+  const rows: TextBlock[][] = [];
 
   for (const b of sorted) {
     const center = b.y + b.height / 2;
-    const line = lines[lines.length - 1];
-    if (line) {
-      const ref = line[0];
-      const refCenter = ref.y + ref.height / 2;
-      const sameLine = Math.abs(center - refCenter) < Math.max(ref.height, b.height) * 0.6;
-      // 只有紧挨着的才算同一行。放宽了会把右边那一列（"89% used"）、
-      // 甚至旁边另一个窗口里同一水平线上的字，一起拼进这一行。
-      // 间距要按两边都算：新块可能落在行的左边，只看 b.x - 右边界 会得到负数，
-      // 那样任何距离都算"紧挨着"，半个屏幕外的字也会被拼进来。
-      const lineLeft = Math.min(...line.map(x => x.x));
-      const lineRight = Math.max(...line.map(x => x.x + x.width));
-      const gapX = Math.max(b.x - lineRight, lineLeft - (b.x + b.width));
-      const near = gapX < Math.max(ref.height, b.height) * 1.2;
-      // 上下必须真的压在一条线上，避免把斜着挨近的块拉进来
-      const overlapY = Math.min(b.y + b.height, ref.y + ref.height) - Math.max(b.y, ref.y);
-      const overlapOk = overlapY > Math.min(b.height, ref.height) * 0.5;
-      if (sameLine && near && overlapOk) { line.push(b); continue; }
+    const row = rows[rows.length - 1];
+    if (row) {
+      const refCenter = row[0].y + row[0].height / 2;
+      const tolerance = Math.max(row[0].height, b.height) * 0.55;
+      if (Math.abs(center - refCenter) < tolerance) { row.push(b); continue; }
     }
-    lines.push([b]);
+    rows.push([b]);
   }
 
-  return lines.map(line => {
-    const parts = [...line].sort((a, b) => a.x - b.x);
-    const x = Math.min(...parts.map(b => b.x));
-    const y = Math.min(...parts.map(b => b.y));
-    const right = Math.max(...parts.map(b => b.x + b.width));
-    const bottom = Math.max(...parts.map(b => b.y + b.height));
-    return {
-      text: joinLines(parts.map(b => b.text)),
-      confidence: Math.min(...parts.map(b => b.confidence)),
-      x, y, width: right - x, height: bottom - y,
+  // 行内按 x 串起来；空当特别大的地方断开——那通常是另一栏、另一个窗口，
+  // 不是同一句话。普通短语之间的空当只有几十像素，这个阈值放得宽一些。
+  const lines: TextBlock[] = [];
+  for (const row of rows) {
+    const parts = [...row].sort((a, b) => a.x - b.x);
+    let segment: TextBlock[] = [];
+    const flushSegment = () => {
+      if (!segment.length) return;
+      lines.push(mergeParts(segment));
+      segment = [];
     };
-  });
+    for (const part of parts) {
+      const prev = segment[segment.length - 1];
+      if (prev) {
+        // 空当明显超过一个词距就断开：那通常是另一栏、另一个窗口，不是同一句话
+        const gap = part.x - (prev.x + prev.width);
+        const limit = Math.max(prev.height, part.height) * 2.5;
+        if (gap > limit) flushSegment();
+      }
+      segment.push(part);
+    }
+    flushSegment();
+  }
+  return lines;
+}
+
+function mergeParts(parts: TextBlock[]): TextBlock {
+  const x = Math.min(...parts.map(b => b.x));
+  const y = Math.min(...parts.map(b => b.y));
+  const right = Math.max(...parts.map(b => b.x + b.width));
+  const bottom = Math.max(...parts.map(b => b.y + b.height));
+  return {
+    text: joinLines(parts.map(b => b.text)),
+    confidence: Math.min(...parts.map(b => b.confidence)),
+    x, y, width: right - x, height: bottom - y,
+  };
+}
+
+/// 段内代表行高取中位数。取最大值的话，只要有一个框被 OCR 画高了，
+/// 整段字号就会被顶上去，画出来是一坨压在别的段落上的大字。
+function medianHeight(lines: TextBlock[]): number {
+  const hs = lines.map(b => b.height).sort((a, b) => a - b);
+  return hs[Math.floor(hs.length / 2)];
 }
 
 /// 第二步：把行并成"段"。行距不超过一行高、左边缘对齐、字号接近就算同一段。
@@ -549,7 +580,7 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
       text: joinLines(group.map(b => b.text)),
       confidence: Math.min(...group.map(b => b.confidence)),
       x, y, width: right - x, height: bottom - y,
-      lineHeight: Math.max(...group.map(b => b.height)),
+      lineHeight: medianHeight(group),
       lineCount: group.length,
     });
     group = [];
@@ -568,31 +599,22 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
   return out;
 }
 
-/// 行尾断词（"perma-" + "nent"）接回去，中文之间不要空格，其余按空格拼。
-/// 拼之前还要去掉重复：象限重叠处同一行常被识别两次，两块文字首尾是重的
-/// （"...usage credits. Credits" + "Credits never expire..."），直接拼会拼出
-/// "信用使用信用" 这种车轱辘话。
-function joinLines(lines: string[]): string {
-  return lines.reduce((acc, line) => appendPart(acc, line.trim()), '');
+
+/// OCR 偶尔会给一整段吐一个跨好几行的大框，里面的文字是几行糊在一起的，
+/// 常常还认错字。这种框和正常行块压在一起，翻出来就是一团盖住段落的乱码。
+/// 判据：框高明显超出整屏行高的常态，而且和别的块重叠——正常的大标题不会
+/// 压在别的文字上，所以不会被误伤。
+function dropOversizedBoxes(blocks: TextBlock[]): TextBlock[] {
+  if (blocks.length < 4) return blocks;
+  const heights = blocks.map(b => b.height).sort((a, b) => a - b);
+  const median = heights[Math.floor(heights.length / 2)];
+  const limit = median * 2.2;
+
+  return blocks.filter(b => {
+    if (b.height <= limit) return true;
+    return !blocks.some(other => other !== b && rectOverlapRatio(b, other) > 0.5);
+  });
 }
-
-function appendPart(acc: string, part: string): string {
-  if (!part) return acc;
-  if (!acc) return part;
-  if (acc.endsWith(part) || acc.includes(part)) return acc;
-
-  // 后一块的开头和前面已拼内容的结尾重了多少，就从那里接上
-  const max = Math.min(acc.length, part.length);
-  for (let n = max; n >= 4; n--) {
-    if (acc.slice(-n) === part.slice(0, n)) return acc + part.slice(n);
-  }
-
-  if (/[A-Za-z]-$/.test(acc)) return acc.slice(0, -1) + part;
-  const cjkTail = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]$/.test(acc);
-  const cjkHead = /^[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(part);
-  return acc + (cjkTail && cjkHead ? '' : ' ') + part;
-}
-
 
 function rectOverlapRatio(a: {x:number,y:number,width:number,height:number}, b: {x:number,y:number,width:number,height:number}): number {
   const ix = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
@@ -782,7 +804,7 @@ async function handleRegionTranslate() {
     }
 
     showLoading(t('translatingPct', { n: 70 }));
-    const paragraphs = groupIntoParagraphs(blocksToTranslate);
+    const paragraphs = groupIntoParagraphs(blocksToTranslate, selection.width);
     const texts = paragraphs.map(b => b.text);
     const translations = await translate(texts, targetLang, config);
 

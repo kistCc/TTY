@@ -19,6 +19,8 @@ export interface OverlayBlock {
 export interface OverlayData {
   screenshotPath: string; // file path, not data URL
   blocks: OverlayBlock[];
+  /// 并段之前的原始文本块，用来把原文擦干净（碎块不并段也不能留着英文）
+  eraseRects?: Array<{ x: number; y: number; width: number; height: number }>;
   displayBounds?: { x: number; y: number; width: number; height: number };
 }
 
