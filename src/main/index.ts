@@ -661,10 +661,15 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
       if (pitch < 0 || pitch > Math.max(last.height, line.height) * 1.45) continue;
       // 行距接近 0 = 本来就是同一条视觉行（行内被断开的两段），无条件接上，
       // 不看左边缘也不看字号——否则它们会各自成段，然后在同一个位置互相压着画。
-      const sameVisualLine = pitch < Math.min(last.height, line.height) * 0.5;
+      // 但隔得太远的不算：聚行时已经按"空当超过 4 倍字高"把它们劈开了（那是隔壁窗口、
+      // 另一栏），这里再无条件接上就把刚劈开的又粘回去。
+      const gapX = Math.max(line.x, last.x) - Math.min(line.x + line.width, last.x + last.width);
+      const sameVisualLine = pitch < Math.min(last.height, line.height) * 0.5
+        && gapX <= Math.max(last.height, line.height) * 4;
       if (sameVisualLine) { if (pitch < bestPitch) { bestPitch = pitch; bestIdx = i; } continue; }
       if (line.height > last.height * 1.5 || line.height < last.height * 0.66) continue;
       if (endsShort(last, line, margin.get(last)!)) continue;
+      if (LIST_MARKER.test(line.text)) continue;
       // 左边缘对齐是"同一段"的常见特征，但密排正文里 OCR 常把一行的开头单独切走，
       // 剩下的那块就从半路开始，左边缘对不上，整段被拆得七零八落、还互相压着画。
       // 所以左边缘对不上时再看"横向是否落在同一栏"：两行的横向区间大幅重叠也算同段。
@@ -693,6 +698,10 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
   });
 }
 
+
+/// 以列表记号开头的行是新的一条，不接在上一行后面：编号、项目符号、带括号的序号。
+/// 一条列表项自己折行时，续行不会以记号开头，照常并进来。
+const LIST_MARKER = /^\s*(\d{1,3}[.)、]\s|[a-zA-Z][.)]\s|\(\d{1,3}\)\s?|[•·▪◦●○■□◆‣–—*-]\s|[①-⑳]|[一二三四五六七八九十]+、)/;
 
 /// 排版常识：自动折行只在"下一个词放不下"时才发生，所以一段里除了最后一行都写到接近右边界。
 /// 上一行右边空出来的地方明明放得下下一行的第一个词，却换行了——那是作者自己按的回车，
