@@ -33,13 +33,15 @@ static double strokeWeight(const uint8_t *gray, size_t W, size_t H, double x, do
     return (2.0 * area / edge) / (y1 - y0);
 }
 
-/// `ocr-macos --windows <自己的pid>`：屏幕上可见的普通窗口，从前到后，全局坐标（点）。
+/// `ocr-macos --windows <自己的pid>`：屏幕上可见的窗口（含浮动面板），从前到后，全局坐标（点）。
 /// 只要位置，不要标题，所以不需要额外权限。
 static int listWindows(pid_t selfPid) {
     CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
     NSMutableArray *out = [NSMutableArray array];
     for (NSDictionary *win in (__bridge NSArray *)list) {
-        if ([win[(id)kCGWindowLayer] intValue] != 0) continue;
+        // 普通窗口是 0 层，浮动面板在它上面；Dock、菜单栏及以上不是装内容的窗口
+        int layer = [win[(id)kCGWindowLayer] intValue];
+        if (layer < 0 || layer >= kCGDockWindowLevel) continue;
         if ([win[(id)kCGWindowOwnerPID] intValue] == selfPid) continue;
         if ([win[(id)kCGWindowAlpha] doubleValue] <= 0) continue;
         CGRect r;
