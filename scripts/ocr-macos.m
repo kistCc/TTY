@@ -59,43 +59,73 @@ int main(int argc, const char *argv[]) {
         CGFloat imgW = CGImageGetWidth(ocrImage);
         CGFloat imgH = CGImageGetHeight(ocrImage);
 
-        VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
-        request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
-        if (@available(macOS 13, *)) {
-            request.revision = VNRecognizeTextRequestRevision3;
-            request.automaticallyDetectsLanguage = YES;
-        }
-        request.recognitionLanguages = @[@"zh-Hans", @"zh-Hant", @"ja", @"ko",
-                                          @"en", @"fr", @"de", @"es", @"pt", @"it"];
-        request.usesLanguageCorrection = YES;
-        request.minimumTextHeight = 0.0;
+        // 高屏按横条分片识别：Vision 会把整张图缩到固定输入尺寸再找字，图越高，
+        // 每行字被缩得越小，密排长页面会整片漏字。横着切只切在行与行之间，
+        // 不会把一行撕成两半；片间留一点重叠，骑缝的行两片都能认到，调用方按内容去重。
+        // 用 regionOfInterest 而不是先裁成小图：Vision 自己按像素裁，不经过别的图像库，
+        // 也不用落临时文件。
+        const int stripes = origH >= 1200 ? 3 : 1;
+        const CGFloat overlap = 0.06;
+        CGFloat band = 1.0 / stripes;
+        CGFloat pad = stripes > 1 ? band * overlap : 0;
 
         VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:ocrImage options:@{}];
-        NSError *error = nil;
-        [handler performRequests:@[request] error:&error];
-        if (error) {
-            if (ocrImage != cgImage) CGImageRelease(ocrImage);
-            fprintf(stderr, "OCR failed: %s\n", error.localizedDescription.UTF8String);
-            return 1;
-        }
-
         NSMutableArray *results = [NSMutableArray array];
-        for (VNRecognizedTextObservation *obs in request.results) {
-            VNRecognizedText *candidate = [[obs topCandidates:1] firstObject];
-            if (!candidate || candidate.confidence < 0.2) continue;
+        for (int i = 0; i < stripes; i++) {
+            // Vision 的归一化坐标原点在左下；第 0 片是屏幕最上面那一条
+            CGFloat top = MAX(0, i * band - pad);
+            CGFloat bottom = MIN(1, (i + 1) * band + pad);
+            CGRect roi = CGRectMake(0, 1.0 - bottom, 1, bottom - top);
 
-            CGRect box = obs.boundingBox;
-            double x = box.origin.x * imgW / scale;
-            double y = (1.0 - box.origin.y - box.size.height) * imgH / scale;
-            double w = box.size.width * imgW / scale;
-            double h = box.size.height * imgH / scale;
+            NSArray *obsList = nil;
+            // 同一片认出 0 个框时再认一次：盲测里见过某一片整条空手而回、其余两片正常。
+            // 真的是空白区域的话，第二次也很快。
+            for (int attempt = 0; attempt < 2 && obsList.count == 0; attempt++) {
+                VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
+                request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+                if (@available(macOS 13, *)) {
+                    request.revision = VNRecognizeTextRequestRevision3;
+                    request.automaticallyDetectsLanguage = YES;
+                }
+                request.recognitionLanguages = @[@"zh-Hans", @"zh-Hant", @"ja", @"ko",
+                                                  @"en", @"fr", @"de", @"es", @"pt", @"it"];
+                request.usesLanguageCorrection = YES;
+                request.minimumTextHeight = 0.0;
+                request.regionOfInterest = roi;
 
-            [results addObject:@{
-                @"text": candidate.string,
-                @"confidence": @(candidate.confidence),
-                @"x": @(round(x)), @"y": @(round(y)),
-                @"width": @(round(w)), @"height": @(round(h))
-            }];
+                NSError *error = nil;
+                [handler performRequests:@[request] error:&error];
+                if (error) {
+                    if (ocrImage != cgImage) CGImageRelease(ocrImage);
+                    fprintf(stderr, "OCR failed: %s\n", error.localizedDescription.UTF8String);
+                    return 1;
+                }
+                obsList = request.results;
+                fprintf(stderr, "stripe %d/%d try %d: %lu\n", i + 1, stripes, attempt + 1, (unsigned long)obsList.count);
+            }
+
+            for (VNRecognizedTextObservation *obs in obsList) {
+                VNRecognizedText *candidate = [[obs topCandidates:1] firstObject];
+                if (!candidate || candidate.confidence < 0.2) continue;
+
+                // boundingBox 是相对 regionOfInterest 的，换回整图的归一化坐标
+                CGRect b = obs.boundingBox;
+                CGRect box = CGRectMake(roi.origin.x + b.origin.x * roi.size.width,
+                                        roi.origin.y + b.origin.y * roi.size.height,
+                                        b.size.width * roi.size.width,
+                                        b.size.height * roi.size.height);
+                double x = box.origin.x * imgW / scale;
+                double y = (1.0 - box.origin.y - box.size.height) * imgH / scale;
+                double w = box.size.width * imgW / scale;
+                double h = box.size.height * imgH / scale;
+
+                [results addObject:@{
+                    @"text": candidate.string,
+                    @"confidence": @(candidate.confidence),
+                    @"x": @(round(x)), @"y": @(round(y)),
+                    @"width": @(round(w)), @"height": @(round(h))
+                }];
+            }
         }
 
         if (ocrImage != cgImage) CGImageRelease(ocrImage);

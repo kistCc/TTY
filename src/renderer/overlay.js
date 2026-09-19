@@ -89,14 +89,6 @@ window.api.onShowTranslation((data) => {
         const fitted = Math.round(Math.sqrt((w * h) / (0.65 * srcLen)));
         if (fitted > 0) originalFontSize = Math.min(originalFontSize, fitted);
       }
-      // 上面那个估计用的是"OCR 读出来多少字"。OCR 少读了几个词，字数偏小，估出来的
-      // 字号就偏大。再用整屏的行节奏兜一道：框高是几倍行高，就当它装着几行，
-      // 每行也就一个行高那么大。只对长文本生效——标题本来就是"框大字少"，不该被压。
-      if (srcLen >= 40 && medianLineH > 0 && h > 0) {
-        const rows = Math.max(1, Math.round(h / medianLineH));
-        originalFontSize = Math.min(originalFontSize, Math.round((h / rows) * FONT_HEIGHT_RATIO));
-      }
-
       const minFontSize = Math.max(10, Math.floor(originalFontSize * MIN_FONT_RATIO));
       let fontSize = originalFontSize;
       let wrapped = null;

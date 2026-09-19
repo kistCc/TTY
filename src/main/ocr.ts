@@ -1,9 +1,5 @@
 import { execFile } from 'child_process';
-import { nativeImage } from 'electron';
-import * as path from 'path';
-import * as os from 'os';
-import * as fs from 'fs';
-import { ensureNative } from './native';
+import { ensureNative, debugLogVerbose } from './native';
 
 export interface TextBlock {
   text: string;
@@ -12,61 +8,6 @@ export interface TextBlock {
   y: number;
   width: number;
   height: number;
-}
-
-/// 整屏识别，但按"横条"分片。
-///
-/// 这里原本切成 2x2 象限：小图确实能提高精度，但竖着那一刀会把一行文字从中间
-/// 撕开，左右两半分属不同块，后面无论怎么拼都在猜，常常把半句话送去翻译。
-/// 于是一度改回整屏一次识别——结果是密排的长页面上，Vision 会整片整片地漏字
-/// （实测一页 76 行的等宽正文，中间连着三行一个框都没吐出来）。
-///
-/// 横条分片两头都占：文字是横向排列的，横着切只会切在行与行之间，永远不会把
-/// 一行切成两半；每片又都比整屏小，精度跟着回来。片与片之间留一点重叠，
-/// 骑在缝上的那一行两片都能认到，最后按内容去重。
-const OCR_STRIPES = 3;
-const OCR_OVERLAP = 0.06;
-/// 小图本来就认得准，切了反而多花时间
-const OCR_SPLIT_MIN_HEIGHT = 1200;
-
-export async function performOCRSplit(imagePath: string): Promise<TextBlock[]> {
-  let full: Electron.NativeImage;
-  try {
-    full = nativeImage.createFromPath(imagePath);
-  } catch {
-    return performOCR(imagePath);
-  }
-  const { width, height } = full.getSize();
-  if (!width || !height || height < OCR_SPLIT_MIN_HEIGHT) return performOCR(imagePath);
-
-  const band = Math.ceil(height / OCR_STRIPES);
-  const pad = Math.round(band * OCR_OVERLAP);
-  const temps: string[] = [];
-  const jobs: Promise<TextBlock[]>[] = [];
-
-  try {
-    for (let i = 0; i < OCR_STRIPES; i++) {
-      const top = Math.max(0, i * band - pad);
-      const bottom = Math.min(height, (i + 1) * band + pad);
-      if (bottom - top <= 0) continue;
-      const piece = full.crop({ x: 0, y: top, width, height: bottom - top });
-      const file = path.join(os.tmpdir(), `tty-ocr-${process.pid}-${Date.now()}-${i}.png`);
-      fs.writeFileSync(file, piece.toPNG());
-      temps.push(file);
-      jobs.push(performOCR(file).then(blocks => blocks.map(b => ({ ...b, y: b.y + top }))));
-    }
-  } catch (err) {
-    for (const f of temps) { try { fs.unlinkSync(f); } catch {} }
-    console.error('[ocr] 切条失败，改为整屏识别:', err);
-    return performOCR(imagePath);
-  }
-
-  try {
-    const parts = await Promise.all(jobs);
-    return dedupeStripeOverlap(parts.flat());
-  } finally {
-    for (const f of temps) { try { fs.unlinkSync(f); } catch {} }
-  }
 }
 
 /// 去掉骑在两片重叠带上、被认了两次的块。判据是"框压在一起 + 文字一样"，
@@ -96,6 +37,8 @@ function dedupeStripeOverlap(blocks: TextBlock[]): TextBlock[] {
   return kept;
 }
 
+/// 高屏会在原生程序里按横条分片识别（见 scripts/ocr-macos.m），骑缝的行两片都会认到，
+/// 这里统一去重。
 export function performOCR(imagePath: string): Promise<TextBlock[]> {
   return new Promise(async (resolve, reject) => {
     const { binaryPath, error } = await ensureNative('ocr-macos');
@@ -106,12 +49,12 @@ export function performOCR(imagePath: string): Promise<TextBlock[]> {
         reject(new Error(`OCR 失败: ${(stderr || err.message).toString().trim().slice(0, 200)}`));
         return;
       }
+      if (stderr) debugLogVerbose(`OCR 分片: ${stderr.toString().trim().replace(/\n/g, ' | ')}`);
       try {
-        resolve(JSON.parse(stdout.trim()) as TextBlock[]);
+        resolve(dedupeStripeOverlap(JSON.parse(stdout.trim()) as TextBlock[]));
       } catch {
         reject(new Error('OCR 输出解析失败'));
       }
     });
   });
 }
-

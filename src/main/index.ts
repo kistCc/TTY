@@ -6,7 +6,7 @@ import * as nodePath from 'path';
 app.setName('TTY');
 app.setPath('userData', nodePath.join(app.getPath('appData'), 'TTY'));
 import { takeScreenshot } from './screenshot';
-import { performOCR, performOCRSplit, TextBlock } from './ocr';
+import { performOCR, TextBlock } from './ocr';
 import { getAccessibilityText, AXTextBlock } from './accessibility';
 import { translate } from './translator';
 import { getConfig, saveConfig, migrateConfig, applyLoginItem } from './config';
@@ -299,7 +299,7 @@ async function handleTranslate() {
 
     showLoading(t('detecting', { n: 25 }));
     const [ocrBlocks, axBlocks] = await Promise.all([
-      performOCRSplit(screenshotPath), // split large images into quadrants for better accuracy
+      performOCR(screenshotPath),
       getAccessibilityText(frontPid),
     ]);
     showLoading(t('analyzing', { n: 40 }));
@@ -647,6 +647,7 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
   // 两边的行按 y 交替到达；只留一个"当前段"的话，右边来一行就把左边的段截断，
   // 正文第一行会被单独剩下。每来一行先找一个最贴合的段接上去，找不到才另起一段。
   const groups: TextBlock[][] = [];
+  const margin = new Map(sorted.map(l => [l, rightMargin(l, sorted)]));
 
   for (const line of sorted) {
     let bestIdx = -1;
@@ -663,6 +664,7 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
       const sameVisualLine = pitch < Math.min(last.height, line.height) * 0.5;
       if (sameVisualLine) { if (pitch < bestPitch) { bestPitch = pitch; bestIdx = i; } continue; }
       if (line.height > last.height * 1.5 || line.height < last.height * 0.66) continue;
+      if (endsShort(last, line, margin.get(last)!)) continue;
       // 左边缘对齐是"同一段"的常见特征，但密排正文里 OCR 常把一行的开头单独切走，
       // 剩下的那块就从半路开始，左边缘对不上，整段被拆得七零八落、还互相压着画。
       // 所以左边缘对不上时再看"横向是否落在同一栏"：两行的横向区间大幅重叠也算同段。
@@ -691,6 +693,33 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
   });
 }
 
+
+/// 排版常识：自动折行只在"下一个词放不下"时才发生，所以一段里除了最后一行都写到接近右边界。
+/// 上一行右边空出来的地方明明放得下下一行的第一个词，却换行了——那是作者自己按的回车，
+/// 这一段到此结束。设置页、FAQ、列表都是一行一条，靠这条才不会被并成一大段。
+///
+/// 词宽按下一行自己的平均字宽估，多留两个字的余量吸收比例字体的误差；
+/// 中日韩文字不靠空格断词，任何一个字都能折行，第一个"词"就是一个字。
+function endsShort(last: TextBlock, next: TextBlock, marginRight: number): boolean {
+  const text = next.text.trim();
+  if (!text) return false;
+  const charW = next.width / text.length;
+  const firstWord = /^[\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]/.test(text) ? 1 : text.split(/\s+/)[0].length;
+  const room = marginRight - (last.x + last.width);
+  return room > (firstWord + 2) * charW;
+}
+
+/// 一行所在那块文字的右边界：同一缩进（左边缘相近、字号相近）的那些行，右端的高位数。
+/// 只看同缩进的行，引用块、缩进块才会按它们自己的右边界算，不会拿整栏最宽的正文来比；
+/// 取高位数而不是最大值，个别被 OCR 拼宽的行顶不上去。
+function rightMargin(line: TextBlock, lines: TextBlock[]): number {
+  const rights = lines
+    .filter(o => Math.abs(o.x - line.x) <= line.height * 1.5
+      && o.height < line.height * 1.5 && o.height > line.height * 0.66)
+    .map(o => o.x + o.width)
+    .sort((a, b) => a - b);
+  return rights.length ? Math.max(line.x + line.width, rights[Math.floor((rights.length - 1) * 0.9)]) : line.x + line.width;
+}
 
 /// Vision 偶尔会把一行只认出半个字高——框高只有整屏行高中位数的一半，
 /// 认出来的字也跟着缺一半：reflow it, measure it, or translate it ... 会变成
