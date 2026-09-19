@@ -748,14 +748,14 @@ function endsShort(last: TextBlock, next: TextBlock, marginRight: number): boole
 
 /// 一行所在那块文字的右边界：同一缩进（左边缘相近、字号相近）的那些行，右端的高位数。
 /// 只看同缩进的行，引用块、缩进块才会按它们自己的右边界算，不会拿整栏最宽的正文来比；
-/// 取高位数而不是最大值，个别被 OCR 拼宽的行顶不上去。
+/// 取高位数而不是最大值，个别被 OCR 拼宽的行顶不上去；向上取整，行少的时候才不会退化成中位数。
 function rightMargin(line: TextBlock, lines: TextBlock[]): number {
   const rights = lines
     .filter(o => Math.abs(o.x - line.x) <= line.height * 1.5
       && o.height < line.height * 1.5 && o.height > line.height * 0.66)
     .map(o => o.x + o.width)
     .sort((a, b) => a - b);
-  return rights.length ? Math.max(line.x + line.width, rights[Math.floor((rights.length - 1) * 0.9)]) : line.x + line.width;
+  return rights.length ? Math.max(line.x + line.width, rights[Math.ceil((rights.length - 1) * 0.9)]) : line.x + line.width;
 }
 
 /// Vision 偶尔会把一行只认出半个字高——框高只有整屏行高中位数的一半，
