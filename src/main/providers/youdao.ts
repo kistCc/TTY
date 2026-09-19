@@ -18,6 +18,8 @@ const KEY_GETTER_KEY = 'asdjnjfenknafdfsdfsd';
 /// 网页接口按行保留原文换行结构，所以一批文本可以用换行拼成一次请求发出去，
 /// 回来再按行拆开。行数对不上时退回逐条翻译，宁可慢也不能让整屏译文串位。
 const BATCH_SIZE = 20;
+/// 一次请求最多拼多少字符。整段翻译之后一条就是一整段，光按条数切会拼出超长请求。
+const BATCH_MAX_CHARS = 1200;
 const MAX_CONCURRENCY = 4;
 /// 密钥有时效，缓存一段时间就重取；请求失败时也会立刻作废重来。
 const KEY_TTL_MS = 10 * 60 * 1000;
@@ -216,8 +218,12 @@ export async function translateWithYoudao(
       console.warn(
         `[Youdao] 合并批次对不上（发出 ${batch.length} 行，回来 ${lines.length} 行/${echoed.length} 段原文），改为逐条翻译`
       );
+      // 逐条重翻时一条失败不能把整批拖下水，否则那一批全部退回原文。
       const one: string[] = [];
-      for (const text of batch) one.push((await translateOne(text, to)).text);
+      for (const text of batch) {
+        try { one.push((await translateOne(text, to)).text); }
+        catch (e) { console.error('[Youdao] 单条翻译失败:', e); one.push(''); }
+      }
       return one;
     },
     (err, batch) => {
@@ -225,7 +231,8 @@ export async function translateWithYoudao(
       cachedKey = null;
       lastError = err?.message || String(err);
       console.error(`[Youdao] 翻译失败（${batch.length} 条）:`, lastError);
-    }
+    },
+    BATCH_MAX_CHARS
   );
 
   const results = batched.flat();

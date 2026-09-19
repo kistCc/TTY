@@ -7,12 +7,24 @@ export async function mapBatchesConcurrent<T>(
   batchSize: number,
   concurrency: number,
   handler: (batch: string[]) => Promise<T[]>,
-  onBatchError?: (err: any, batch: string[]) => void
+  onBatchError?: (err: any, batch: string[]) => void,
+  maxChars?: number
 ): Promise<T[][]> {
+  // 批次不能只按"条数"切。改成整段翻译之后，一条就是一整段（三四百字），
+  // 20 条拼起来能有七八千字，接口直接不返回，整批退回原文——屏幕上就留下一片
+  // 没翻译的英文。所以再加一道字符预算，哪个先到按哪个切；
+  // 单独一条就超预算的，自己单独成一批。
   const batches: string[][] = [];
-  for (let i = 0; i < texts.length; i += batchSize) {
-    batches.push(texts.slice(i, i + batchSize));
+  let cur: string[] = [];
+  let curChars = 0;
+  for (const text of texts) {
+    const len = text.length + 1;
+    const full = cur.length >= batchSize || (maxChars !== undefined && cur.length > 0 && curChars + len > maxChars);
+    if (full) { batches.push(cur); cur = []; curChars = 0; }
+    cur.push(text);
+    curChars += len;
   }
+  if (cur.length) batches.push(cur);
 
   // 按下标回填，结果顺序和输入顺序始终一致，与完成先后无关。
   const out: T[][] = new Array(batches.length);

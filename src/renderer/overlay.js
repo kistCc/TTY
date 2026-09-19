@@ -67,12 +67,35 @@ window.api.onShowTranslation((data) => {
       const { rowH, rowCenter } = rowMetrics[i];
 
       const isParagraph = p.lineCount > 1;
-      const baseH = isParagraph ? p.lineH : rowH;
+      // rowH 取的是整行里最高的那个框，用来让同一行的块字号一致。但密排正文里
+      // OCR 会把一行切成好几块、高度参差不齐，一个偏高的框就会把同行别的块的
+      // 字号顶上去，画出一串压在别人身上的大字。谁都不许比自己那个框大太多。
+      const baseH = isParagraph ? p.lineH : Math.min(rowH, p.lineH * 1.25);
       const isBold = baseH > 44;
       const weight = isBold ? 'bold' : 'normal';
       const fontFamily = '-apple-system, "PingFang SC", "Hiragino Sans GB", sans-serif';
       const clampedH = Math.min(Math.max(baseH, minLineH), maxLineH);
-      const originalFontSize = Math.round(clampedH * FONT_HEIGHT_RATIO);
+      let originalFontSize = Math.round(clampedH * FONT_HEIGHT_RATIO);
+
+      // 按"面积/字数"再估一次字号，取小的那个。
+      //
+      // 框高不总等于一行高：OCR 经常把两三行糊进一个框，照框高定字号就画出一坨
+      // 两三倍大的字压在别人身上。但不管几行，"原文塞满这个框"这件事是成立的：
+      // 一个字大约占 0.5f 宽、1.3f 高，所以 宽×高 ≈ 0.65·f²·字数，反解出 f。
+      // 这个估计跟框里到底有几行无关，糊成一团的框会自动被压回正常字号；
+      // 而标题那种"框大字少"的，估出来的 f 反而更大，取小之后不受影响。
+      const srcLen = (block.text || '').replace(/\s+/g, ' ').trim().length;
+      if (srcLen >= 8 && w > 0 && h > 0) {
+        const fitted = Math.round(Math.sqrt((w * h) / (0.65 * srcLen)));
+        if (fitted > 0) originalFontSize = Math.min(originalFontSize, fitted);
+      }
+      // 上面那个估计用的是"OCR 读出来多少字"。OCR 少读了几个词，字数偏小，估出来的
+      // 字号就偏大。再用整屏的行节奏兜一道：框高是几倍行高，就当它装着几行，
+      // 每行也就一个行高那么大。只对长文本生效——标题本来就是"框大字少"，不该被压。
+      if (srcLen >= 40 && medianLineH > 0 && h > 0) {
+        const rows = Math.max(1, Math.round(h / medianLineH));
+        originalFontSize = Math.min(originalFontSize, Math.round((h / rows) * FONT_HEIGHT_RATIO));
+      }
 
       const minFontSize = Math.max(10, Math.floor(originalFontSize * MIN_FONT_RATIO));
       let fontSize = originalFontSize;

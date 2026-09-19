@@ -10,7 +10,7 @@ import { performOCR, performOCRSplit, TextBlock } from './ocr';
 import { getAccessibilityText, AXTextBlock } from './accessibility';
 import { translate } from './translator';
 import { getConfig, saveConfig, migrateConfig, applyLoginItem } from './config';
-import { debugLog } from './native';
+import { debugLog, debugLogVerbose } from './native';
 import { joinParts as joinLines } from './text-join';
 import { t } from './i18n';
 import { ensureOverlayWindow, showOverlay, hideOverlay, isOverlayVisible, showLoading, hideLoading, showCancelled, setDismissCallback, discardCurrentScreenshot } from './overlay';
@@ -309,6 +309,9 @@ async function handleTranslate() {
     console.log(`[detect] OCR: ${ocrBlocks.length}, AX: ${axBlocks.length}, refined: ${textBlocks.length}`);
     debugLog(`识别：OCR ${ocrBlocks.length} 块, AX ${axBlocks.length} 块, 合并后 ${textBlocks.length} 块`);
     if (ocrBlocks.length) debugLog(`OCR 头几条: ${ocrBlocks.slice(0, 5).map(b => b.text).join(' | ')}`);
+    for (const b of ocrBlocks) {
+      debugLogVerbose(`  原始块 ${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}x${Math.round(b.height)} c=${b.confidence.toFixed(2)} | ${b.text}`);
+    }
 
     if (textBlocks.length === 0) {
       debugLog('一个文本块都没有，结束');
@@ -377,10 +380,13 @@ async function handleTranslate() {
     if (activeProgressTimer) { clearInterval(activeProgressTimer); activeProgressTimer = null; }
     if (isCancelled) { cleanup(screenshotPath); return; }
 
-    const translatedBlocks = paragraphs.map((block, i) => ({
-      ...block,
-      translated: translations[i] || block.text,
-    }));
+    // 没翻出来的段落（接口失败、返回空）一个都别画：照原文画上去就是"英文盖英文"，
+    // 字号还不一定对；擦掉又只剩一片空白。干脆原样留着，看着是没翻，至少不是坏的。
+    const failed = paragraphs.filter((_, i) => !translations[i]);
+    if (failed.length) debugLog(`有 ${failed.length} 段没翻出来，保持原文不动`);
+    const translatedBlocks = paragraphs
+      .map((block, i) => ({ ...block, translated: translations[i] || '' }))
+      .filter(b => b.translated);
 
     // Store pending cache — only saved if user presses Shift+S
     pendingCacheKey = hash;
@@ -394,7 +400,9 @@ async function handleTranslate() {
     showOverlay({
       screenshotPath,
       blocks: translatedBlocks,
-      eraseRects: cssBlocks.map(b => ({ x: b.x, y: b.y, width: b.width, height: b.height })),
+      eraseRects: cssBlocks
+        .filter(r => !failed.some(f => rectOverlapRatio(f, r) > 0.5))
+        .map(b => ({ x: b.x, y: b.y, width: b.width, height: b.height })),
       displayBounds: display.bounds,
     });
     sendHotkeyState('SHOWN');
@@ -475,7 +483,62 @@ export interface ParagraphBlock extends TextBlock {
 }
 
 function groupIntoParagraphs(blocks: TextBlock[], screenWidth: number): ParagraphBlock[] {
-  return dropSwallowed(groupLinesIntoParagraphs(clusterIntoLines(blocks, screenWidth)));
+  const out: ParagraphBlock[] = [];
+  for (const column of splitIntoColumns(blocks, screenWidth)) {
+    const lines = clusterIntoLines(column, screenWidth);
+    for (const l of lines) {
+      debugLogVerbose(`  行 ${Math.round(l.x)},${Math.round(l.y)} ${Math.round(l.width)}x${Math.round(l.height)} | ${l.text}`);
+    }
+    out.push(...dropSwallowed(groupLinesIntoParagraphs(lines)));
+  }
+  return out;
+}
+
+/// 先按"竖直空白带"把整屏切成几栏，再分别聚行并段。
+///
+/// 空白带 = 从屏幕顶到底都没有任何文字盖到的一段 x 区间。并排的两个窗口、
+/// 分栏排版的正文之间一定留着这样一条带子；而一行中间漏掉几个词只是这一行上的
+/// 空当，别的行会把那段 x 盖住，不会形成带子。
+///
+/// 这条比"两块之间的空当有多宽"可靠得多：实测同一行里漏词造成的空当（49px）
+/// 和隔壁窗口的间距（51px）差不多宽，光看空当根本分不开，分完栏就一点都不含糊。
+function splitIntoColumns(blocks: TextBlock[], screenWidth: number): TextBlock[][] {
+  if (blocks.length < 8 || screenWidth <= 0) return [blocks];
+  const BUCKET = 4;
+  const n = Math.ceil(screenWidth / BUCKET) + 1;
+  const covered = new Uint8Array(n);
+  for (const b of blocks) {
+    const from = Math.max(0, Math.floor(b.x / BUCKET));
+    const to = Math.min(n - 1, Math.ceil((b.x + b.width) / BUCKET));
+    for (let i = from; i <= to; i++) covered[i] = 1;
+  }
+
+  // 太窄的空白带不算分栏（可能只是段落缩进凑巧对齐）
+  const minGutter = Math.max(24, screenWidth * 0.012);
+  const cuts: number[] = [];
+  let runStart = -1;
+  for (let i = 0; i <= n; i++) {
+    const isBlank = i < n && !covered[i];
+    if (isBlank) { if (runStart < 0) runStart = i; continue; }
+    if (runStart >= 0) {
+      // 贴着屏幕左右边缘的空白是页边距，不是栏与栏之间的带子
+      const touchesEdge = runStart === 0 || i >= n;
+      if (!touchesEdge && (i - runStart) * BUCKET >= minGutter) cuts.push(((runStart + i) / 2) * BUCKET);
+      runStart = -1;
+    }
+  }
+  if (!cuts.length) return [blocks];
+
+  const columns: TextBlock[][] = Array.from({ length: cuts.length + 1 }, () => []);
+  for (const b of blocks) {
+    const center = b.x + b.width / 2;
+    let k = 0;
+    while (k < cuts.length && center > cuts[k]) k++;
+    columns[k].push(b);
+  }
+  const kept = columns.filter(c => c.length);
+  if (kept.length > 1) debugLogVerbose(`  分栏：${kept.length} 栏，切点 ${cuts.map(c => Math.round(c)).join(', ')}`);
+  return kept;
 }
 
 /// 象限重叠处偶尔会多出一小块（"are only" 这种半截），它整个落在某个段落的框里，
@@ -483,18 +546,22 @@ function groupIntoParagraphs(blocks: TextBlock[], screenWidth: number): Paragrap
 /// 只丢"几乎完全被包住"的，普通的相邻、部分交叠一律保留——上一版按交叠面积丢，
 /// 结果把同一段里的行也丢了，整段少了半截。
 function dropSwallowed(paragraphs: ParagraphBlock[]): ParagraphBlock[] {
+  const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
   return paragraphs.filter((b, i) =>
     !paragraphs.some((other, j) => {
       if (i === j) return false;
-      // 只针对"整个落在多行段落里的单行块"。这类要么是碎片，要么是 OCR 吐出的
-      // 跨行大框，内容都在段落里出现过，留着只会盖住段落。
-      if (b.lineCount > 1 || other.lineCount < 2) return false;
       const bArea = b.width * b.height;
       const otherArea = other.width * other.height;
       if (otherArea <= bArea) return false;
+      // 内容判据：这一块的文字整句都在另一段里出现过，画上去只是把那段盖住一遍
+      const bText = norm(b.text);
+      if (bText.length >= 12 && norm(other.text).includes(bText)) return true;
+      // 几何判据：只针对"整个落在多行段落里的小块"。这类要么是碎片，要么是 OCR
+      // 吐出的跨行大框，留着只会压在段落上。
+      if (b.lineCount > 2 || other.lineCount < 2) return false;
       const ix = Math.max(0, Math.min(b.x + b.width, other.x + other.width) - Math.max(b.x, other.x));
       const iy = Math.max(0, Math.min(b.y + b.height, other.y + other.height) - Math.max(b.y, other.y));
-      return bArea > 0 && (ix * iy) / bArea > 0.75;
+      return bArea > 0 && (ix * iy) / bArea > 0.6;
     })
   );
 }
@@ -537,9 +604,11 @@ function clusterIntoLines(blocks: TextBlock[], screenWidth: number): TextBlock[]
     for (const part of parts) {
       const prev = segment[segment.length - 1];
       if (prev) {
-        // 空当明显超过一个词距就断开：那通常是另一栏、另一个窗口，不是同一句话
+        // 空当明显超过一个词距就断开：那通常是另一栏、另一个窗口，不是同一句话。
+        // 阈值不能太窄：OCR 经常漏掉行中间的一两个词（"content. [If you] reasonably
+        // object..."），留下的空当有三四个字高，按 2.5 倍判就把一行劈成两半了。
         const gap = part.x - (prev.x + prev.width);
-        const limit = Math.max(prev.height, part.height) * 2.5;
+        const limit = Math.max(prev.height, part.height) * 4;
         if (gap > limit) flushSegment();
       }
       segment.push(part);
@@ -554,10 +623,13 @@ function mergeParts(parts: TextBlock[]): TextBlock {
   const y = Math.min(...parts.map(b => b.y));
   const right = Math.max(...parts.map(b => b.x + b.width));
   const bottom = Math.max(...parts.map(b => b.y + b.height));
+  // 行高别让个别偏高的框（带下划线的词、带括号的词）顶上去：一行的高度一旦
+  // 虚高，后面按"字号接近"判同段时，正常高度的下一行就会被判成不同段。
+  const cap = medianHeight(parts) * 1.4;
   return {
     text: joinLines(parts.map(b => b.text)),
     confidence: Math.min(...parts.map(b => b.confidence)),
-    x, y, width: right - x, height: bottom - y,
+    x, y, width: right - x, height: Math.min(bottom - y, cap),
   };
 }
 
@@ -586,8 +658,18 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
       // 行距则很干脆：同段约等于一倍行高，空一行直接翻倍。
       const pitch = (line.y + line.height / 2) - (last.y + last.height / 2);
       if (pitch < 0 || pitch > Math.max(last.height, line.height) * 1.45) continue;
+      // 行距接近 0 = 本来就是同一条视觉行（行内被断开的两段），无条件接上，
+      // 不看左边缘也不看字号——否则它们会各自成段，然后在同一个位置互相压着画。
+      const sameVisualLine = pitch < Math.min(last.height, line.height) * 0.5;
+      if (sameVisualLine) { if (pitch < bestPitch) { bestPitch = pitch; bestIdx = i; } continue; }
       if (line.height > last.height * 1.5 || line.height < last.height * 0.66) continue;
-      if (Math.abs(line.x - last.x) > last.height * 1.5) continue;
+      // 左边缘对齐是"同一段"的常见特征，但密排正文里 OCR 常把一行的开头单独切走，
+      // 剩下的那块就从半路开始，左边缘对不上，整段被拆得七零八落、还互相压着画。
+      // 所以左边缘对不上时再看"横向是否落在同一栏"：两行的横向区间大幅重叠也算同段。
+      // 分栏、分窗口的文字横向不重叠，不会被误并。
+      const overlapX = Math.min(line.x + line.width, last.x + last.width) - Math.max(line.x, last.x);
+      const sameColumn = overlapX > Math.min(line.width, last.width) * 0.6;
+      if (Math.abs(line.x - last.x) > last.height * 1.5 && !sameColumn) continue;
       if (pitch < bestPitch) { bestPitch = pitch; bestIdx = i; }
     }
     if (bestIdx >= 0) groups[bestIdx].push(line);
@@ -881,10 +963,13 @@ async function handleRegionTranslate() {
     const texts = paragraphs.map(b => b.text);
     const translations = await translate(texts, targetLang, config);
 
-    const translatedBlocks = paragraphs.map((block, i) => ({
-      ...block,
-      translated: translations[i] || block.text,
-    }));
+    // 没翻出来的段落（接口失败、返回空）一个都别画：照原文画上去就是"英文盖英文"，
+    // 字号还不一定对；擦掉又只剩一片空白。干脆原样留着，看着是没翻，至少不是坏的。
+    const failed = paragraphs.filter((_, i) => !translations[i]);
+    if (failed.length) debugLog(`有 ${failed.length} 段没翻出来，保持原文不动`);
+    const translatedBlocks = paragraphs
+      .map((block, i) => ({ ...block, translated: translations[i] || '' }))
+      .filter(b => b.translated);
 
     hideLoading();
     showRegionOverlay({

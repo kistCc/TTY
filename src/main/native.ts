@@ -23,6 +23,17 @@ export function debugLog(msg: string) {
   } catch {}
 }
 
+/// 版面问题（段落被拆开、译文互相压着）光看最后的段落列表看不出原因，
+/// 得看 OCR 原始框和聚出来的行。这一路输出很长，所以单独一个开关：
+/// `touch ~/Developer/TTY/tty-debug-ocr.log` 打开，删掉就关。
+export function debugLogVerbose(msg: string) {
+  try {
+    const os = require('os');
+    if (!fs.existsSync(path.join(os.homedir(), 'Developer', 'TTY', 'tty-debug-ocr.log'))) return;
+    debugLog(msg);
+  } catch {}
+}
+
 /// 每个程序需要链接的 framework。改这里就够了，package.json 的 build:native
 /// 是同样参数的一份预编译，两边必须一致。
 const FRAMEWORKS: Record<NativeTool, string[]> = {
