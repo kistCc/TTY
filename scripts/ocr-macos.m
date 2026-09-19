@@ -70,7 +70,7 @@ int main(int argc, const char *argv[]) {
         // 原图的灰度，给 strokeWeight 量笔画用（不用增强过的那张：锐化会把笔画描粗）
         uint8_t *gray = calloc(origW * origH, 1);
         CGColorSpaceRef graySpace = CGColorSpaceCreateDeviceGray();
-        CGContextRef grayCtx = CGBitmapContextCreate(gray, origW, origH, 8, origW, graySpace, kCGImageAlphaNone);
+        CGContextRef grayCtx = CGBitmapContextCreate(gray, origW, origH, 8, origW, graySpace, (CGBitmapInfo)kCGImageAlphaNone);
         if (grayCtx) { CGContextDrawImage(grayCtx, CGRectMake(0, 0, origW, origH), cgImage); CGContextRelease(grayCtx); }
         CGColorSpaceRelease(graySpace);
 

@@ -291,6 +291,7 @@ async function handleTranslate() {
     // 等浮层真正从屏幕上消失再截屏。100ms 够一帧合成，再长就是白等。
     await new Promise(r => setTimeout(r, 100));
     const [screenshotPath, windows] = await Promise.all([takeScreenshot(display.bounds), listWindows()]);
+    debugLogVerbose(`窗口 ${windows.length} 个: ${windows.map(w => `${Math.round(w.x)},${Math.round(w.y)} ${Math.round(w.width)}x${Math.round(w.height)}`).join(' | ')}`);
     try {
       debugLog(`截图 ${screenshotPath} ${fs.statSync(screenshotPath).size} 字节, 显示器 ${display.bounds.width}x${display.bounds.height} @${scaleFactor}x`);
     } catch (e) { debugLog(`截图失败: ${e}`); }
@@ -310,7 +311,7 @@ async function handleTranslate() {
     debugLog(`识别：OCR ${ocrBlocks.length} 块, AX ${axBlocks.length} 块, 合并后 ${textBlocks.length} 块`);
     if (ocrBlocks.length) debugLog(`OCR 头几条: ${ocrBlocks.slice(0, 5).map(b => b.text).join(' | ')}`);
     for (const b of ocrBlocks) {
-      debugLogVerbose(`  原始块 ${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}x${Math.round(b.height)} c=${b.confidence.toFixed(2)} | ${b.text}`);
+      debugLogVerbose(`  原始块 ${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}x${Math.round(b.height)} c=${b.confidence.toFixed(2)} w=${(b.weight || 0).toFixed(3)} | ${b.text}`);
     }
 
     if (textBlocks.length === 0) {
@@ -487,7 +488,7 @@ function groupIntoParagraphs(blocks: TextBlock[], screenWidth: number, windows: 
   for (const column of splitByWindow(blocks, windows).flatMap(w => splitIntoColumns(w, screenWidth))) {
     const lines = clusterIntoLines(column, screenWidth);
     for (const l of lines) {
-      debugLogVerbose(`  行 ${Math.round(l.x)},${Math.round(l.y)} ${Math.round(l.width)}x${Math.round(l.height)} | ${l.text}`);
+      debugLogVerbose(`  行 ${Math.round(l.x)},${Math.round(l.y)} ${Math.round(l.width)}x${Math.round(l.height)} w=${(l.weight || 0).toFixed(3)} | ${l.text}`);
     }
     out.push(...dropSwallowed(groupLinesIntoParagraphs(lines)));
   }
