@@ -6,7 +6,7 @@ import * as nodePath from 'path';
 app.setName('TTY');
 app.setPath('userData', nodePath.join(app.getPath('appData'), 'TTY'));
 import { takeScreenshot } from './screenshot';
-import { performOCR, TextBlock } from './ocr';
+import { performOCR, textSimilarity, TextBlock } from './ocr';
 import { getAccessibilityText, AXTextBlock } from './accessibility';
 import { translate } from './translator';
 import { getConfig, saveConfig, migrateConfig, applyLoginItem } from './config';
@@ -951,24 +951,6 @@ function refineWithAccessibility(
   }
 
   return refined;
-}
-
-function textSimilarity(a: string, b: string): number {
-  const la = a.trim().toLowerCase();
-  const lb = b.trim().toLowerCase();
-  if (!la || !lb) return 0;
-  if (la === lb) return 1;
-  // 光看"谁包含谁"会让 "Usage" 冒充 "Usage limits"，AX 就把另一个元素的文本和坐标
-  // 套到这一块上，译文贴到别处去。短的那个至少要占长的一多半才算同一个元素。
-  if (la.includes(lb) || lb.includes(la)) {
-    const ratio = Math.min(la.length, lb.length) / Math.max(la.length, lb.length);
-    return ratio >= 0.6 ? 0.6 + ratio * 0.3 : ratio * 0.5;
-  }
-  const wordsA = new Set(la.split(/\s+/));
-  const wordsB = new Set(lb.split(/\s+/));
-  let overlap = 0;
-  for (const w of wordsA) { if (wordsB.has(w)) overlap++; }
-  return overlap / Math.max(wordsA.size, wordsB.size);
 }
 
 async function handleRegionTranslate() {

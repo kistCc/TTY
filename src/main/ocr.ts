@@ -24,7 +24,9 @@ function dedupeStripeOverlap(blocks: TextBlock[]): TextBlock[] {
       const smaller = Math.min(k.width * k.height, b.width * b.height);
       if (smaller <= 0 || (ix * iy) / smaller < 0.5) return false;
       const kt = norm(k.text);
-      return kt === bt || (bt.length >= 4 && (kt.includes(bt) || bt.includes(kt)));
+      // 骑缝那一行两片各认一遍，常常只差在边上一两个字（被别的窗口切掉的位置不同），
+      // 所以按"词大多相同"判，不要求一字不差
+      return kt === bt || (bt.length >= 4 && (kt.includes(bt) || bt.includes(kt))) || textSimilarity(kt, bt) >= 0.8;
     });
     if (dupIdx < 0) { kept.push(b); continue; }
     // 留认得更全的那个：先看置信度，再看谁的字多
@@ -57,4 +59,22 @@ export function performOCR(imagePath: string): Promise<TextBlock[]> {
       }
     });
   });
+}
+
+export function textSimilarity(a: string, b: string): number {
+  const la = a.trim().toLowerCase();
+  const lb = b.trim().toLowerCase();
+  if (!la || !lb) return 0;
+  if (la === lb) return 1;
+  // 光看"谁包含谁"会让 "Usage" 冒充 "Usage limits"，AX 就把另一个元素的文本和坐标
+  // 套到这一块上，译文贴到别处去。短的那个至少要占长的一多半才算同一个元素。
+  if (la.includes(lb) || lb.includes(la)) {
+    const ratio = Math.min(la.length, lb.length) / Math.max(la.length, lb.length);
+    return ratio >= 0.6 ? 0.6 + ratio * 0.3 : ratio * 0.5;
+  }
+  const wordsA = new Set(la.split(/\s+/));
+  const wordsB = new Set(lb.split(/\s+/));
+  let overlap = 0;
+  for (const w of wordsA) { if (wordsB.has(w)) overlap++; }
+  return overlap / Math.max(wordsA.size, wordsB.size);
 }
