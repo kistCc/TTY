@@ -3,9 +3,60 @@
 #import <AppKit/AppKit.h>
 #import <CoreImage/CoreImage.h>
 
+/// 笔画粗细：框里墨迹面积 × 2 ÷ 墨迹边界像素数，约等于平均笔画宽度，跟是哪些字母无关；
+/// 再除以框高，得到跟字号无关的"字重"。粗体大约是常规体的 1.5 倍。
+/// 墨迹 = 框内跟背景差得远的像素；背景取框内亮度的中位数（文字只占框的一小部分）。
+static double strokeWeight(const uint8_t *gray, size_t W, size_t H, double x, double y, double w, double h) {
+    long x0 = MAX(0, (long)x), y0 = MAX(0, (long)y);
+    long x1 = MIN((long)W, (long)(x + w)), y1 = MIN((long)H, (long)(y + h));
+    if (x1 - x0 < 4 || y1 - y0 < 4) return 0;
+    int hist[256] = {0};
+    long n = 0;
+    for (long yy = y0; yy < y1; yy++) for (long xx = x0; xx < x1; xx++) { hist[gray[yy * W + xx]]++; n++; }
+    int bg = 0; long acc = 0;
+    for (; bg < 256; bg++) { acc += hist[bg]; if (acc * 2 >= n) break; }
+    // 墨迹阈值：背景和最远那一端的中点
+    int far = bg;
+    for (int v = 0; v < 256; v++) if (hist[v] && abs(v - bg) > abs(far - bg)) far = v;
+    int cut = abs(far - bg) / 2;
+    if (cut < 24) return 0;  // 框里几乎没有对比，量不出来
+    #define INK(xx, yy) (abs((int)gray[(yy) * W + (xx)] - bg) > cut)
+    long area = 0, edge = 0;
+    for (long yy = y0; yy < y1; yy++) for (long xx = x0; xx < x1; xx++) {
+        if (!INK(xx, yy)) continue;
+        area++;
+        if (xx == x0 || xx == x1 - 1 || yy == y0 || yy == y1 - 1
+            || !INK(xx - 1, yy) || !INK(xx + 1, yy) || !INK(xx, yy - 1) || !INK(xx, yy + 1)) edge++;
+    }
+    #undef INK
+    if (!edge) return 0;
+    return (2.0 * area / edge) / (y1 - y0);
+}
+
+/// `ocr-macos --windows <自己的pid>`：屏幕上可见的普通窗口，从前到后，全局坐标（点）。
+/// 只要位置，不要标题，所以不需要额外权限。
+static int listWindows(pid_t selfPid) {
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSDictionary *win in (__bridge NSArray *)list) {
+        if ([win[(id)kCGWindowLayer] intValue] != 0) continue;
+        if ([win[(id)kCGWindowOwnerPID] intValue] == selfPid) continue;
+        if ([win[(id)kCGWindowAlpha] doubleValue] <= 0) continue;
+        CGRect r;
+        if (!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)win[(id)kCGWindowBounds], &r)) continue;
+        if (r.size.width < 40 || r.size.height < 40) continue;
+        [out addObject:@{ @"x": @(r.origin.x), @"y": @(r.origin.y), @"width": @(r.size.width), @"height": @(r.size.height) }];
+    }
+    if (list) CFRelease(list);
+    NSData *json = [NSJSONSerialization dataWithJSONObject:out options:0 error:nil];
+    printf("%s\n", [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding].UTF8String);
+    return 0;
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         if (argc < 2) { fprintf(stderr, "Usage: ocr-macos <image-path>\n"); return 1; }
+        if (strcmp(argv[1], "--windows") == 0) return listWindows(argc > 2 ? atoi(argv[2]) : 0);
 
         NSString *imagePath = [NSString stringWithUTF8String:argv[1]];
         NSImage *image = [[NSImage alloc] initWithContentsOfFile:imagePath];
@@ -16,6 +67,12 @@ int main(int argc, const char *argv[]) {
 
         size_t origW = CGImageGetWidth(cgImage);
         size_t origH = CGImageGetHeight(cgImage);
+        // 原图的灰度，给 strokeWeight 量笔画用（不用增强过的那张：锐化会把笔画描粗）
+        uint8_t *gray = calloc(origW * origH, 1);
+        CGColorSpaceRef graySpace = CGColorSpaceCreateDeviceGray();
+        CGContextRef grayCtx = CGBitmapContextCreate(gray, origW, origH, 8, origW, graySpace, kCGImageAlphaNone);
+        if (grayCtx) { CGContextDrawImage(grayCtx, CGRectMake(0, 0, origW, origH), cgImage); CGContextRelease(grayCtx); }
+        CGColorSpaceRelease(graySpace);
 
         // 2x upscale for better small text detection
         CGFloat scale = 2.0;
@@ -123,7 +180,8 @@ int main(int argc, const char *argv[]) {
                     @"text": candidate.string,
                     @"confidence": @(candidate.confidence),
                     @"x": @(round(x)), @"y": @(round(y)),
-                    @"width": @(round(w)), @"height": @(round(h))
+                    @"width": @(round(w)), @"height": @(round(h)),
+                    @"weight": @(strokeWeight(gray, origW, origH, x, y, w, h))
                 }];
             }
         }

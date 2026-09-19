@@ -8,6 +8,22 @@ export interface TextBlock {
   y: number;
   width: number;
   height: number;
+  /// 字重：平均笔画宽度 ÷ 字高（原生程序量的），0 表示量不出来
+  weight?: number;
+}
+
+export interface WindowRect { x: number; y: number; width: number; height: number; }
+
+/// 屏幕上可见的普通窗口，从前到后，全局坐标（点）。要在截图那一刻取，
+/// 版面重建时用它保证不同窗口里的字不会被并到一起。拿不到就当没有窗口信息。
+export async function listWindows(): Promise<WindowRect[]> {
+  const { binaryPath, error } = await ensureNative('ocr-macos');
+  if (error) return [];
+  return new Promise(resolve => {
+    execFile(binaryPath, ['--windows', String(process.pid)], { timeout: 3000 }, (err, stdout) => {
+      try { resolve(err ? [] : JSON.parse(stdout.trim())); } catch { resolve([]); }
+    });
+  });
 }
 
 /// 去掉骑在两片重叠带上、被认了两次的块。判据是"框压在一起 + 文字一样"，

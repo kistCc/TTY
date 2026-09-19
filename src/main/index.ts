@@ -6,7 +6,7 @@ import * as nodePath from 'path';
 app.setName('TTY');
 app.setPath('userData', nodePath.join(app.getPath('appData'), 'TTY'));
 import { takeScreenshot } from './screenshot';
-import { performOCR, textSimilarity, TextBlock } from './ocr';
+import { performOCR, listWindows, textSimilarity, TextBlock, WindowRect } from './ocr';
 import { getAccessibilityText, AXTextBlock } from './accessibility';
 import { translate } from './translator';
 import { getConfig, saveConfig, migrateConfig, applyLoginItem } from './config';
@@ -290,7 +290,7 @@ async function handleTranslate() {
     hideLoading();
     // 等浮层真正从屏幕上消失再截屏。100ms 够一帧合成，再长就是白等。
     await new Promise(r => setTimeout(r, 100));
-    const screenshotPath = await takeScreenshot(display.bounds);
+    const [screenshotPath, windows] = await Promise.all([takeScreenshot(display.bounds), listWindows()]);
     try {
       debugLog(`截图 ${screenshotPath} ${fs.statSync(screenshotPath).size} 字节, 显示器 ${display.bounds.width}x${display.bounds.height} @${scaleFactor}x`);
     } catch (e) { debugLog(`截图失败: ${e}`); }
@@ -355,7 +355,7 @@ async function handleTranslate() {
       hideLoading(); cleanup(screenshotPath); return;
     }
 
-    const paragraphs = groupIntoParagraphs(dropDuplicateBoxes(dropLowConfidenceOverlaps(dropUndersizedBoxes(dropOversizedBoxes(blocksToTranslate)))), display.bounds.width);
+    const paragraphs = groupIntoParagraphs(dropDuplicateBoxes(dropLowConfidenceOverlaps(dropUndersizedBoxes(dropOversizedBoxes(blocksToTranslate)))), display.bounds.width, windowsOnDisplay(windows, display.bounds));
     if (paragraphs.length !== blocksToTranslate.length) {
       debugLog(`按版面并段：${blocksToTranslate.length} 行 → ${paragraphs.length} 段`);
     }
@@ -482,9 +482,9 @@ export interface ParagraphBlock extends TextBlock {
   lineCount: number;
 }
 
-function groupIntoParagraphs(blocks: TextBlock[], screenWidth: number): ParagraphBlock[] {
+function groupIntoParagraphs(blocks: TextBlock[], screenWidth: number, windows: WindowRect[] = []): ParagraphBlock[] {
   const out: ParagraphBlock[] = [];
-  for (const column of splitIntoColumns(blocks, screenWidth)) {
+  for (const column of splitByWindow(blocks, windows).flatMap(w => splitIntoColumns(w, screenWidth))) {
     const lines = clusterIntoLines(column, screenWidth);
     for (const l of lines) {
       debugLogVerbose(`  行 ${Math.round(l.x)},${Math.round(l.y)} ${Math.round(l.width)}x${Math.round(l.height)} | ${l.text}`);
@@ -492,6 +492,25 @@ function groupIntoParagraphs(blocks: TextBlock[], screenWidth: number): Paragrap
     out.push(...dropSwallowed(groupLinesIntoParagraphs(lines)));
   }
   return out;
+}
+
+/// 截图那一刻的窗口换算到这块屏幕的 CSS 坐标（和 cssBlocks 同一套）
+function windowsOnDisplay(windows: WindowRect[], bounds: Electron.Rectangle): WindowRect[] {
+  return windows.map(w => ({ ...w, x: w.x - bounds.x, y: w.y - bounds.y }));
+}
+
+/// 按窗口分组：每一块归给"从前往后第一个盖住它中心的窗口"，不在任何窗口里的
+/// （菜单栏、桌面上的字）归一组。不同窗口的字不可能是同一句话——后面窗口的一行字
+/// 一直伸到前面窗口的边上时，两窗之间的空白窄到分不出栏，只能靠这个。
+function splitByWindow(blocks: TextBlock[], windows: WindowRect[]): TextBlock[][] {
+  if (!windows.length) return [blocks];
+  const groups = new Map<number, TextBlock[]>();
+  for (const b of blocks) {
+    const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+    const k = windows.findIndex(w => cx >= w.x && cx < w.x + w.width && cy >= w.y && cy < w.y + w.height);
+    groups.set(k, [...(groups.get(k) || []), b]);
+  }
+  return [...groups.values()];
 }
 
 /// 先按"竖直空白带"把整屏切成几栏，再分别聚行并段。
@@ -631,7 +650,15 @@ function mergeParts(parts: TextBlock[]): TextBlock {
     text: joinLines(parts.map(b => b.text)),
     confidence: Math.min(...parts.map(b => b.confidence)),
     x, y, width: right - x, height: Math.min(bottom - y, cap),
+    weight: lineWeight(parts),
   };
+}
+
+/// 一行的字重：各段按宽度加权平均，量不出来的段不算
+function lineWeight(parts: TextBlock[]): number {
+  let sum = 0, wsum = 0;
+  for (const p of parts) if (p.weight) { sum += p.weight * p.width; wsum += p.width; }
+  return wsum ? sum / wsum : 0;
 }
 
 /// 段内代表行高取中位数。取最大值的话，只要有一个框被 OCR 画高了，
@@ -674,6 +701,9 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
       // 段间距：行距明显大过这一页自己的单倍行距，就是两段之间多空出来的那一截
       if (singlePitch && pitch > singlePitch * 1.25 * Math.max(last.height, line.height)) continue;
       if (LIST_MARKER.test(line.text)) continue;
+      // 字重不同不是同一段：粗体小标题后面紧跟正文、正文后面紧跟粗体标签。
+      // 粗体的笔画大约是常规体的 1.5 倍，两者之间取 1.25 倍为界；量不出来的行不参与。
+      if (last.weight && line.weight && Math.max(last.weight, line.weight) > Math.min(last.weight, line.weight) * 1.25) continue;
       // 左边缘对齐是"同一段"的常见特征，但密排正文里 OCR 常把一行的开头单独切走，
       // 剩下的那块就从半路开始，左边缘对不上，整段被拆得七零八落、还互相压着画。
       // 所以左边缘对不上时再看"横向是否落在同一栏"：两行的横向区间大幅重叠也算同段。
