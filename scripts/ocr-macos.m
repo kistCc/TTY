@@ -54,6 +54,24 @@ static int listWindows(pid_t selfPid) {
     return 0;
 }
 
+/// 在图的某个区域（归一化坐标，原点左下）里认字。每次都新建 handler。
+static NSArray *recognize(CGImageRef img, CGRect roi, NSError **error) {
+    VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
+    request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+    if (@available(macOS 13, *)) {
+        request.revision = VNRecognizeTextRequestRevision3;
+        request.automaticallyDetectsLanguage = YES;
+    }
+    request.recognitionLanguages = @[@"zh-Hans", @"zh-Hant", @"ja", @"ko",
+                                      @"en", @"fr", @"de", @"es", @"pt", @"it"];
+    request.usesLanguageCorrection = YES;
+    request.minimumTextHeight = 0.0;
+    request.regionOfInterest = roi;
+    VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:img options:@{}];
+    [handler performRequests:@[request] error:error];
+    return request.results ?: @[];
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         if (argc < 2) { fprintf(stderr, "Usage: ocr-macos <image-path>\n"); return 1; }
@@ -110,7 +128,6 @@ int main(int argc, const char *argv[]) {
         CGFloat band = 1.0 / stripes;
         CGFloat pad = stripes > 1 ? band * overlap : 0;
 
-        VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:ocrImage options:@{}];
         NSMutableArray *results = [NSMutableArray array];
         for (int i = 0; i < stripes; i++) {
             // Vision 的归一化坐标原点在左下；第 0 片是屏幕最上面那一条
@@ -118,27 +135,22 @@ int main(int argc, const char *argv[]) {
             CGFloat bottom = MIN(1, (i + 1) * band + pad);
             CGRect roi = CGRectMake(0, 1.0 - bottom, 1, bottom - top);
 
-            VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
-            request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
-            if (@available(macOS 13, *)) {
-                request.revision = VNRecognizeTextRequestRevision3;
-                request.automaticallyDetectsLanguage = YES;
-            }
-            request.recognitionLanguages = @[@"zh-Hans", @"zh-Hant", @"ja", @"ko",
-                                              @"en", @"fr", @"de", @"es", @"pt", @"it"];
-            request.usesLanguageCorrection = YES;
-            request.minimumTextHeight = 0.0;
-            request.regionOfInterest = roi;
-
             NSError *error = nil;
-            [handler performRequests:@[request] error:&error];
+            NSArray *obsList = recognize(ocrImage, roi, &error);
+            // 偶尔会有一整片返回 0 个框（只在 App 里见过，单独跑复现不出来，原因不明）。
+            // 同一张图原样重认没用，换成没放大的原图、新 handler 再认一次；
+            // 真是空白区域的话这次也很快。
+            if (!error && obsList.count == 0 && ocrImage != cgImage) {
+                obsList = recognize(cgImage, roi, &error);
+                fprintf(stderr, "stripe %d/%d: 0, 原图重认 %lu\n", i + 1, stripes, (unsigned long)obsList.count);
+            } else {
+                fprintf(stderr, "stripe %d/%d: %lu\n", i + 1, stripes, (unsigned long)obsList.count);
+            }
             if (error) {
                 if (ocrImage != cgImage) CGImageRelease(ocrImage);
                 fprintf(stderr, "OCR failed: %s\n", error.localizedDescription.UTF8String);
                 return 1;
             }
-            NSArray *obsList = request.results;
-            fprintf(stderr, "stripe %d/%d: %lu\n", i + 1, stripes, (unsigned long)obsList.count);
 
             for (VNRecognizedTextObservation *obs in obsList) {
                 VNRecognizedText *candidate = [[obs topCandidates:1] firstObject];
