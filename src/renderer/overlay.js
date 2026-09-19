@@ -286,9 +286,13 @@ function detectOriginalFontSize(originalText, boxWidth, boxHeight, weight, fontF
 // rowCenter = mean center y of row (avoids vertical jitter between blocks with different h)
 function clusterRowsAndGetHeights(items) {
   if (items.length === 0) return [];
-  const sorted = items.map((it, idx) => ({ it, idx, center: it.y + it.h / 2 }))
-                       .sort((a, b) => a.center - b.center);
   const result = new Array(items.length);
+  // 多行段落不参与"同一行对齐"：它的高度是好几行，拿它当一行的基准，容差跟着放大，
+  // 会把上下好几行别的块吸进同一"行"，画在同一条基线上互相压着。
+  items.forEach((it, idx) => { if (it.lineCount > 1) result[idx] = { rowH: it.h, rowCenter: it.y + it.h / 2 }; });
+  const sorted = items.map((it, idx) => ({ it, idx, center: it.y + it.h / 2 }))
+                       .filter(e => e.it.lineCount <= 1)
+                       .sort((a, b) => a.center - b.center);
   let i = 0;
   while (i < sorted.length) {
     const startCenter = sorted[i].center;

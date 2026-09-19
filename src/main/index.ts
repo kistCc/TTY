@@ -777,16 +777,18 @@ function endsShort(last: TextBlock, next: TextBlock, marginRight: number): boole
   return room > (firstWord + 2) * charW;
 }
 
-/// 一行所在那块文字的右边界：同一缩进（左边缘相近、字号相近）的那些行，右端的高位数。
-/// 只看同缩进的行，引用块、缩进块才会按它们自己的右边界算，不会拿整栏最宽的正文来比；
-/// 取高位数而不是最大值，个别被 OCR 拼宽的行顶不上去；向上取整，行少的时候才不会退化成中位数。
+/// 一行所在那块文字的右边界：同一缩进（左边缘相近、字号相近）的那些行里最靠右的一端。
+/// 只看同缩进的行，引用块、缩进块才会按它们自己的右边界算，不会拿整栏最宽的正文来比。
+/// 取最大值而不是高位数：设置页、列表里大多数行都是短标签，真正折到右边界的只有一两行，
+/// 高位数会落在"普通说明文字的宽度"上而不是右边界。以前担心个别被拼宽的行把边界顶上去，
+/// 现在不同窗口、不同栏的字已经先分开了，同一块文字里不会再有这种行。
 function rightMargin(line: TextBlock, lines: TextBlock[]): number {
   const rights = lines
     .filter(o => Math.abs(o.x - line.x) <= line.height * 1.5
       && o.height < line.height * 1.5 && o.height > line.height * 0.66)
     .map(o => o.x + o.width)
     .sort((a, b) => a - b);
-  return rights.length ? Math.max(line.x + line.width, rights[Math.ceil((rights.length - 1) * 0.9)]) : line.x + line.width;
+  return rights.length ? Math.max(line.x + line.width, rights[rights.length - 1]) : line.x + line.width;
 }
 
 /// Vision 偶尔会把一行只认出半个字高——框高只有整屏行高中位数的一半，
@@ -897,10 +899,13 @@ function refineWithAccessibility(
     let text = ocr.text.trim();
 
     // Reject icon-shaped blocks (small + square OR small + thin)
+    // 只看形状会把短的真词也当图标丢掉（折行剩下的 "sent."、按钮上的 "OK"）。
+    // 图标被认成字时是符号或单个字、置信度也低；两个以上字母、认得有把握的就是字。
+    const looksLikeWord = /\p{L}{2,}/u.test(text) && ocr.confidence >= 0.5;
     const r = ocr.width / Math.max(ocr.height, 1);
     const isSmall = ocr.width < 50 * scaleFactor && ocr.height < 50 * scaleFactor;
-    if (isSmall && r > 0.4 && r < 2.5) return []; // square-ish icon
-    if (ocr.width < 30 * scaleFactor && ocr.height < 30 * scaleFactor) return []; // tiny
+    if (!looksLikeWord && isSmall && r > 0.4 && r < 2.5) return []; // square-ish icon
+    if (!looksLikeWord && ocr.width < 30 * scaleFactor && ocr.height < 30 * scaleFactor) return []; // tiny
 
     // Has SF Symbols PUA chars → likely icon glyph mixed with text
     const hasPUA = /[\uE000-\uF8FF]/.test(text);
