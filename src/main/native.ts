@@ -37,7 +37,7 @@ export function debugLogVerbose(msg: string) {
 /// 每个程序需要链接的 framework。改这里就够了，package.json 的 build:native
 /// 是同样参数的一份预编译，两边必须一致。
 const FRAMEWORKS: Record<NativeTool, string[]> = {
-  'ocr-macos': ['Foundation', 'Vision', 'CoreImage', 'AppKit'],
+  'ocr-macos': ['Foundation', 'Vision', 'AppKit'],
   'hotkey-macos': ['Foundation', 'Carbon', 'AppKit'],
   'axtext-macos': ['Foundation', 'AppKit', 'ApplicationServices'],
 };

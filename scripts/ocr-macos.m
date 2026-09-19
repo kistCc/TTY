@@ -1,7 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <Vision/Vision.h>
 #import <AppKit/AppKit.h>
-#import <CoreImage/CoreImage.h>
 
 /// 笔画粗细：框里墨迹面积 × 2 ÷ 墨迹边界像素数，约等于平均笔画宽度，跟是哪些字母无关；
 /// 再除以框高，得到跟字号无关的"字重"。粗体大约是常规体的 1.5 倍。
@@ -93,27 +92,10 @@ int main(int argc, const char *argv[]) {
             if (scaled) scaledImage = scaled; else scale = 1.0;
         } else { scale = 1.0; }
 
-        // Enhance contrast for low-contrast text (terminals, dim UIs)
-        CIImage *ciInput = [CIImage imageWithCGImage:scaledImage];
-        CIFilter *contrast = [CIFilter filterWithName:@"CIColorControls"];
-        [contrast setValue:ciInput forKey:kCIInputImageKey];
-        [contrast setValue:@(1.3) forKey:@"inputContrast"]; // 1.0 = no change
-        [contrast setValue:@(0.0) forKey:@"inputBrightness"];
-        [contrast setValue:@(0.0) forKey:@"inputSaturation"]; // grayscale helps OCR
-        CIImage *contrastOut = [contrast outputImage];
-
-        // Sharpen — significantly improves small text recognition
-        CIFilter *sharpen = [CIFilter filterWithName:@"CIUnsharpMask"];
-        [sharpen setValue:contrastOut forKey:kCIInputImageKey];
-        [sharpen setValue:@(2.5) forKey:@"inputRadius"];
-        [sharpen setValue:@(0.6) forKey:@"inputIntensity"];
-        CIImage *enhanced = [sharpen outputImage];
-        if (!enhanced) enhanced = contrastOut;
-
-        CIContext *ciCtx = [CIContext contextWithOptions:nil];
-        CGImageRef ocrImage = [ciCtx createCGImage:enhanced fromRect:enhanced.extent];
-        if (!ocrImage) ocrImage = scaledImage;
-        if (scaledImage != cgImage && scaledImage != ocrImage) CGImageRelease(scaledImage);
+        // 以前这里还有"对比度 1.3 + 去色 + 锐化"一步（给暗色终端用的）。实测深色背景的页面上，
+        // 这一步会让 Vision 在某一整片区域里一个字都认不出（每次都一样，不是偶发），
+        // 浅色背景上又几乎没有收益（字数差 0.5%），所以删掉，只保留放大。
+        CGImageRef ocrImage = scaledImage;
 
         CGFloat imgW = CGImageGetWidth(ocrImage);
         CGFloat imgH = CGImageGetHeight(ocrImage);
@@ -136,32 +118,27 @@ int main(int argc, const char *argv[]) {
             CGFloat bottom = MIN(1, (i + 1) * band + pad);
             CGRect roi = CGRectMake(0, 1.0 - bottom, 1, bottom - top);
 
-            NSArray *obsList = nil;
-            // 同一片认出 0 个框时再认一次：盲测里见过某一片整条空手而回、其余两片正常。
-            // 真的是空白区域的话，第二次也很快。
-            for (int attempt = 0; attempt < 2 && obsList.count == 0; attempt++) {
-                VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
-                request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
-                if (@available(macOS 13, *)) {
-                    request.revision = VNRecognizeTextRequestRevision3;
-                    request.automaticallyDetectsLanguage = YES;
-                }
-                request.recognitionLanguages = @[@"zh-Hans", @"zh-Hant", @"ja", @"ko",
-                                                  @"en", @"fr", @"de", @"es", @"pt", @"it"];
-                request.usesLanguageCorrection = YES;
-                request.minimumTextHeight = 0.0;
-                request.regionOfInterest = roi;
-
-                NSError *error = nil;
-                [handler performRequests:@[request] error:&error];
-                if (error) {
-                    if (ocrImage != cgImage) CGImageRelease(ocrImage);
-                    fprintf(stderr, "OCR failed: %s\n", error.localizedDescription.UTF8String);
-                    return 1;
-                }
-                obsList = request.results;
-                fprintf(stderr, "stripe %d/%d try %d: %lu\n", i + 1, stripes, attempt + 1, (unsigned long)obsList.count);
+            VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
+            request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+            if (@available(macOS 13, *)) {
+                request.revision = VNRecognizeTextRequestRevision3;
+                request.automaticallyDetectsLanguage = YES;
             }
+            request.recognitionLanguages = @[@"zh-Hans", @"zh-Hant", @"ja", @"ko",
+                                              @"en", @"fr", @"de", @"es", @"pt", @"it"];
+            request.usesLanguageCorrection = YES;
+            request.minimumTextHeight = 0.0;
+            request.regionOfInterest = roi;
+
+            NSError *error = nil;
+            [handler performRequests:@[request] error:&error];
+            if (error) {
+                if (ocrImage != cgImage) CGImageRelease(ocrImage);
+                fprintf(stderr, "OCR failed: %s\n", error.localizedDescription.UTF8String);
+                return 1;
+            }
+            NSArray *obsList = request.results;
+            fprintf(stderr, "stripe %d/%d: %lu\n", i + 1, stripes, (unsigned long)obsList.count);
 
             for (VNRecognizedTextObservation *obs in obsList) {
                 VNRecognizedText *candidate = [[obs topCandidates:1] firstObject];
