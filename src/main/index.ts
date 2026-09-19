@@ -553,14 +553,15 @@ function dropSwallowed(paragraphs: ParagraphBlock[]): ParagraphBlock[] {
       const bArea = b.width * b.height;
       const otherArea = other.width * other.height;
       if (otherArea <= bArea) return false;
-      // 内容判据：这一块的文字整句都在另一段里出现过，画上去只是把那段盖住一遍
+      const ix = Math.max(0, Math.min(b.x + b.width, other.x + other.width) - Math.max(b.x, other.x));
+      const iy = Math.max(0, Math.min(b.y + b.height, other.y + other.height) - Math.max(b.y, other.y));
+      // 内容判据：这一块的文字整句都在另一段里出现过，画上去只是把那段盖住一遍。
+      // 得是压在同一个位置上：署名在信头和信尾各出现一次，那是两处正经内容，不是重复识别。
       const bText = norm(b.text);
-      if (bText.length >= 12 && norm(other.text).includes(bText)) return true;
+      if (ix * iy > 0 && bText.length >= 12 && norm(other.text).includes(bText)) return true;
       // 几何判据：只针对"整个落在多行段落里的小块"。这类要么是碎片，要么是 OCR
       // 吐出的跨行大框，留着只会压在段落上。
       if (b.lineCount > 2 || other.lineCount < 2) return false;
-      const ix = Math.max(0, Math.min(b.x + b.width, other.x + other.width) - Math.max(b.x, other.x));
-      const iy = Math.max(0, Math.min(b.y + b.height, other.y + other.height) - Math.max(b.y, other.y));
       return bArea > 0 && (ix * iy) / bArea > 0.6;
     })
   );
@@ -648,6 +649,7 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
   // 正文第一行会被单独剩下。每来一行先找一个最贴合的段接上去，找不到才另起一段。
   const groups: TextBlock[][] = [];
   const margin = new Map(sorted.map(l => [l, rightMargin(l, sorted)]));
+  const singlePitch = singleSpacingRatio(sorted);
 
   for (const line of sorted) {
     let bestIdx = -1;
@@ -669,6 +671,8 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
       if (sameVisualLine) { if (pitch < bestPitch) { bestPitch = pitch; bestIdx = i; } continue; }
       if (line.height > last.height * 1.5 || line.height < last.height * 0.66) continue;
       if (endsShort(last, line, margin.get(last)!)) continue;
+      // 段间距：行距明显大过这一页自己的单倍行距，就是两段之间多空出来的那一截
+      if (singlePitch && pitch > singlePitch * 1.25 * Math.max(last.height, line.height)) continue;
       if (LIST_MARKER.test(line.text)) continue;
       // 左边缘对齐是"同一段"的常见特征，但密排正文里 OCR 常把一行的开头单独切走，
       // 剩下的那块就从半路开始，左边缘对不上，整段被拆得七零八落、还互相压着画。
@@ -698,6 +702,30 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
   });
 }
 
+
+/// 这一页的单倍行距（行距 ÷ 字高）。段落之间常常不空整行，只多出半行左右的段间距，
+/// 拿固定倍数去卡分不开；但同一页里总有挨着排的行（段内的续行、信头、列表），
+/// 它们的行距就是这一页的单倍行距。取上下相邻、字号相近、横向重叠的行对，
+/// 行距比的低位数就是它。行对太少量不准，就不用这条。
+function singleSpacingRatio(sorted: TextBlock[]): number {
+  const ratios: number[] = [];
+  sorted.forEach((line, i) => {
+    for (let j = i - 1; j >= 0; j--) {
+      const prev = sorted[j];
+      const pitch = (line.y + line.height / 2) - (prev.y + prev.height / 2);
+      const h = Math.max(prev.height, line.height);
+      if (pitch < h * 0.5) continue;
+      if (pitch > h * 3) break;
+      const overlapX = Math.min(line.x + line.width, prev.x + prev.width) - Math.max(line.x, prev.x);
+      if (overlapX <= 0 || prev.height > line.height * 1.25 || line.height > prev.height * 1.25) continue;
+      ratios.push(pitch / h);
+      break;
+    }
+  });
+  if (ratios.length < 3) return 0;
+  ratios.sort((a, b) => a - b);
+  return ratios[Math.floor((ratios.length - 1) * 0.25)];
+}
 
 /// 以列表记号开头的行是新的一条，不接在上一行后面：编号、项目符号、带括号的序号。
 /// 一条列表项自己折行时，续行不会以记号开头，照常并进来。
