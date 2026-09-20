@@ -1,7 +1,11 @@
 import { ProviderConfig } from '../config';
 import { request } from '../http';
+import { mapBatchesConcurrent, alignedOrOneByOne } from '../batch';
 
 const BATCH_SIZE = 20;
+/// 整段翻译之后一条就是一整段；按字数再切一刀，免得一批的译文超过模型的输出上限被截断
+const BATCH_MAX_CHARS = 6000;
+const MAX_CONCURRENCY = 3;
 
 export async function translateWithClaude(
   texts: string[],
@@ -10,14 +14,14 @@ export async function translateWithClaude(
 ): Promise<string[]> {
   if (!config.apiKey) throw new Error('Claude API key not configured');
 
-  // Batch translate to avoid token limit issues
-  const results: string[] = [];
-  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-    const batch = texts.slice(i, i + BATCH_SIZE);
-    const translated = await translateBatch(batch, targetLang, config);
-    results.push(...translated);
-  }
-  return results;
+  // 和 OpenAI 一样分批并发：以前一批一批串着发，一整屏要等好几轮，而且一批出错整屏都没了
+  const batched = await mapBatchesConcurrent<string>(
+    texts, BATCH_SIZE, MAX_CONCURRENCY,
+    (batch) => translateBatch(batch, targetLang, config),
+    (err, batch) => console.error(`[Claude] Batch failed (${batch.length} texts):`, err?.message || err),
+    BATCH_MAX_CHARS
+  );
+  return batched.flat();
 }
 
 async function translateBatch(
@@ -29,6 +33,7 @@ async function translateBatch(
   const prompt = `Translate this JSON array of UI texts to ${targetLang}. Rules:
 - Return ONLY a JSON array of the same length
 - Keep proper nouns, brand names, URLs, numbers unchanged
+- Tokens like XQZ0, XQZ1 are placeholders for product names: copy them exactly, do not translate, drop or reorder their text
 - Translate naturally for UI context
 - No explanation, no markdown, just the JSON array
 
@@ -69,59 +74,8 @@ ${input}`;
 
   if (!content) {
     console.error('[Claude] Empty response:', JSON.stringify(data).slice(0, 300));
-    return texts; // Fallback: return originals
+    return texts.map(() => ''); // 没有内容 = 没翻出来，交给调用方保留原文
   }
 
-  return parseResponse(content, texts);
-}
-
-function parseResponse(content: string, originals: string[]): string[] {
-  // Try JSON parse
-  const jsonMatch = content.match(/\[[\s\S]*\]/);
-  if (jsonMatch) {
-    try {
-      const arr = JSON.parse(jsonMatch[0]);
-      if (Array.isArray(arr) && arr.length > 0) {
-        // Pad or trim to match expected count
-        const result = arr.map(String);
-        while (result.length < originals.length) result.push(originals[result.length]);
-        return result.slice(0, originals.length);
-      }
-    } catch {
-      // JSON might be truncated, try to fix it
-      try {
-        let fixed = jsonMatch[0];
-        // If truncated, try to close the array
-        if (!fixed.endsWith(']')) {
-          // Remove last incomplete element and close
-          const lastComma = fixed.lastIndexOf(',');
-          if (lastComma > 0) {
-            fixed = fixed.substring(0, lastComma) + ']';
-          }
-        }
-        const arr = JSON.parse(fixed);
-        if (Array.isArray(arr)) {
-          const result = arr.map(String);
-          while (result.length < originals.length) result.push(originals[result.length]);
-          return result.slice(0, originals.length);
-        }
-      } catch {}
-    }
-  }
-
-  // Fallback: strip JSON formatting artifacts
-  const lines = content.split('\n')
-    .map(l => l.trim())
-    .filter(l => l && l !== '[' && l !== ']')
-    .map(l => {
-      // Remove surrounding quotes and trailing commas
-      let s = l.replace(/^["']|["'],?$/g, '').trim();
-      // Remove numbered prefix
-      s = s.replace(/^\d+\.\s*/, '');
-      return s;
-    })
-    .filter(l => l);
-
-  while (lines.length < originals.length) lines.push(originals[lines.length]);
-  return lines.slice(0, originals.length);
+  return alignedOrOneByOne(content, texts, async t => (await translateBatch([t], targetLang, config))[0]);
 }

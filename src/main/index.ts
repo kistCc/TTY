@@ -12,7 +12,7 @@ import { translate } from './translator';
 import { getConfig, saveConfig, migrateConfig, applyLoginItem } from './config';
 import { debugLog, debugLogVerbose } from './native';
 import { joinParts as joinLines } from './text-join';
-import { t } from './i18n';
+import { t, readableError } from './i18n';
 import { ensureOverlayWindow, showOverlay, hideOverlay, isOverlayVisible, showLoading, hideLoading, showCancelled, setDismissCallback, discardCurrentScreenshot } from './overlay';
 import { createTray, openSettings, setTranslateCallback, setHideCallback, setClearCacheCallback, setSelectionTranslateCallback, setClipboardTranslateCallback, setOverlayVisibleFn, updateTrayMenu } from './tray';
 import { startHotkeyMonitor, stopHotkeyMonitor, restartWithHotkeys, sendHotkeyState, setHotkeyPermissionDeniedHandler, setHotkeyRegisterFailedHandler, setTextCallback, setClipCallback, getHotkeyBackend } from './hotkey';
@@ -412,8 +412,7 @@ async function handleTranslate() {
     if (activeProgressTimer) { clearInterval(activeProgressTimer); activeProgressTimer = null; };
     console.error('Translation failed:', err);
     debugLog(`翻译流程抛错: ${err?.stack || err?.message || err}`);
-    const msg = err?.message || String(err);
-    showLoading(t('error', { msg: msg.slice(0, 80) }));
+    showLoading(t('error', { msg: readableError(err) }));
     setTimeout(() => hideLoading(), 3000);
   } finally {
     if (activeProgressTimer) { clearInterval(activeProgressTimer); activeProgressTimer = null; };
@@ -1069,8 +1068,7 @@ async function handleRegionTranslate() {
     });
   } catch (err: any) {
     console.error('[region] Translation failed:', err);
-    const msg = err?.message || String(err);
-    showLoading(t('error', { msg: msg.slice(0, 80) }));
+    showLoading(t('error', { msg: readableError(err) }));
     setTimeout(() => hideLoading(), 3000);
   } finally {
     isRegionProcessing = false;

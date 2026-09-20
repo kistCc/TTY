@@ -3,7 +3,7 @@ import * as path from 'path';
 import { getConfig } from './config';
 import { translate } from './translator';
 import { getSelection } from './selection-text';
-import { isChineseUI } from './i18n';
+import { isChineseUI, readableError } from './i18n';
 
 // 两条取词通道，各自一个快捷键，互不回落——按了哪个键就翻哪来的文本，
 // 不会出现"我明明选中了，翻的却是上次复制的东西"这种事：
@@ -166,10 +166,11 @@ async function runQuick(
   try {
     const [translated] = await translate([body], targetLang, config);
     if (id !== requestSeq) return; // 期间又按了一次，这个结果已经过期
-    send(win, 'quick-result', { id, translated: translated || body });
+    if (!translated) { send(win, 'quick-result', { id, error: '没有翻译出来，请稍后再试或换一个翻译服务' }); return; }
+    send(win, 'quick-result', { id, translated });
   } catch (err: any) {
     if (id !== requestSeq) return;
-    send(win, 'quick-result', { id, error: err?.message || String(err) });
+    send(win, 'quick-result', { id, error: readableError(err) });
   }
 }
 

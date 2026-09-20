@@ -105,7 +105,7 @@ async function fetchKey(): Promise<YoudaoKey> {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new Error(`有道密钥响应无法解析: ${raw.slice(0, 120)}`);
+    throw new Error('有道密钥响应无法解析（可能是网络代理拦截了请求）');
   }
   if (parsed.code !== 0 || !parsed.data?.secretKey) {
     throw new Error(`有道密钥获取失败: code=${parsed.code} ${parsed.msg || ''}`);
@@ -163,12 +163,21 @@ async function translateOne(text: string, targetLang: string): Promise<Translate
     body: body.toString(),
   });
 
+  // 出错时有道回的是明文 JSON（{"code":50,...}）或网页，不是密文。拿去解密只会得到一串乱码，
+  // 以前这串乱码还被原样塞进报错显示出来。先认出明文错误，解密失败也只报一句人话。
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('<')) {
+    let code = '';
+    try { code = String(JSON.parse(trimmed).code ?? ''); } catch {}
+    cachedKey = null;
+    throw new Error(`有道翻译接口返回错误${code ? `（code=${code}）` : ''}，请稍后再试`);
+  }
   let response: YoudaoTranslateResponse;
-  const decrypted = decryptResponse(raw, key.aesKey, key.aesIv);
   try {
-    response = JSON.parse(decrypted);
+    response = JSON.parse(decryptResponse(raw, key.aesKey, key.aesIv));
   } catch {
-    throw new Error(`有道翻译响应无法解析: ${decrypted.slice(0, 120)}`);
+    cachedKey = null; // 多半是密钥过期，下次重新取
+    throw new Error('有道翻译响应解密失败，请稍后再试');
   }
   if (response.code !== 0 || !response.translateResult) {
     throw new Error(`有道翻译失败: code=${response.code}`);
@@ -195,7 +204,6 @@ export async function translateWithYoudao(
   const to = YOUDAO_LANG_MAP[targetLang];
   if (!to) throw new Error(`有道翻译不支持的目标语言: ${targetLang}`);
 
-  let lastError: string | null = null;
   const batched = await mapBatchesConcurrent<string>(
     texts, BATCH_SIZE, MAX_CONCURRENCY,
     async (batch) => {
@@ -229,15 +237,10 @@ export async function translateWithYoudao(
     (err, batch) => {
       // 密钥过期会让在途的请求一起失败，作废后下一批自然会重新取。
       cachedKey = null;
-      lastError = err?.message || String(err);
-      console.error(`[Youdao] 翻译失败（${batch.length} 条）:`, lastError);
+      console.error(`[Youdao] 翻译失败（${batch.length} 条）:`, err?.message || err);
     },
     BATCH_MAX_CHARS
   );
 
-  const results = batched.flat();
-  if (lastError && results.every((r, i) => r === texts[i])) {
-    throw new Error(`有道翻译失败: ${lastError}`);
-  }
-  return results;
+  return batched.flat();
 }

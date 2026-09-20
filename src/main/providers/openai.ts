@@ -1,8 +1,10 @@
 import { ProviderConfig } from '../config';
 import { request } from '../http';
-import { mapBatchesConcurrent } from '../batch';
+import { mapBatchesConcurrent, alignedOrOneByOne } from '../batch';
 
 const BATCH_SIZE = 20;
+/// 整段翻译之后一条就是一整段；按字数再切一刀，免得一批的译文超过模型的输出上限被截断
+const BATCH_MAX_CHARS = 6000;
 // 各家 OpenAI 兼容接口的并发上限差别很大，3 路是个保守又明显更快的取值。
 const MAX_CONCURRENCY = 3;
 
@@ -16,7 +18,8 @@ export async function translateWithOpenAI(
   const batched = await mapBatchesConcurrent<string>(
     texts, BATCH_SIZE, MAX_CONCURRENCY,
     (batch) => translateBatch(batch, targetLang, config),
-    (err, batch) => console.error(`[OpenAI] Batch failed (${batch.length} texts):`, err?.message || err)
+    (err, batch) => console.error(`[OpenAI] Batch failed (${batch.length} texts):`, err?.message || err),
+    BATCH_MAX_CHARS
   );
   return batched.flat();
 }
@@ -30,6 +33,7 @@ async function translateBatch(
   const prompt = `Translate this JSON array of UI texts to ${targetLang}. Rules:
 - Return ONLY a JSON array of the same length
 - Keep proper nouns, brand names, URLs, numbers unchanged
+- Tokens like XQZ0, XQZ1 are placeholders for product names: copy them exactly, do not translate, drop or reorder their text
 - Translate naturally for UI context
 - No explanation, no markdown, just the JSON array
 
@@ -56,44 +60,7 @@ ${input}`;
   const content = data.choices?.[0]?.message?.content?.trim();
   if (!content) {
     console.error('[OpenAI] Empty response:', JSON.stringify(data).slice(0, 300));
-    return texts;
+    return texts.map(() => ''); // 没有内容 = 没翻出来，交给调用方保留原文
   }
-  return parseResponse(content, texts);
-}
-
-function parseResponse(content: string, originals: string[]): string[] {
-  const jsonMatch = content.match(/\[[\s\S]*\]/);
-  if (jsonMatch) {
-    try {
-      const arr = JSON.parse(jsonMatch[0]);
-      if (Array.isArray(arr)) {
-        const result = arr.map(String);
-        while (result.length < originals.length) result.push(originals[result.length]);
-        return result.slice(0, originals.length);
-      }
-    } catch {
-      try {
-        let fixed = jsonMatch[0];
-        if (!fixed.endsWith(']')) {
-          const lastComma = fixed.lastIndexOf(',');
-          if (lastComma > 0) fixed = fixed.substring(0, lastComma) + ']';
-        }
-        const arr = JSON.parse(fixed);
-        if (Array.isArray(arr)) {
-          const result = arr.map(String);
-          while (result.length < originals.length) result.push(originals[result.length]);
-          return result.slice(0, originals.length);
-        }
-      } catch {}
-    }
-  }
-
-  const lines = content.split('\n')
-    .map(l => l.trim())
-    .filter(l => l && l !== '[' && l !== ']')
-    .map(l => l.replace(/^["']|["'],?$/g, '').replace(/^\d+\.\s*/, '').trim())
-    .filter(l => l);
-
-  while (lines.length < originals.length) lines.push(originals[lines.length]);
-  return lines.slice(0, originals.length);
+  return alignedOrOneByOne(content, texts, async t => (await translateBatch([t], targetLang, config))[0]);
 }

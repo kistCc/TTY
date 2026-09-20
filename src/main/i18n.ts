@@ -110,6 +110,22 @@ export function resetUILanguage() {
   cachedIsZh = null;
 }
 
+/// 报错显示前最后一道清洗：修复按错编码解出来的中文，去掉控制字符、解码失败留下的替换符和 HTML 标签，
+/// 剩下的看起来不像人话（乱码占多数）就换成一句通用提示。
+export function readableError(err: any): string {
+  let msg = String(err?.message || err || '');
+  // UTF-8 的中文被当成 Latin-1 解出来的典型乱码（"ç¼“å­˜"）：按 Latin-1 编回字节再按 UTF-8 解，能解干净就用解出来的
+  if (/[\u00c2-\u00f4][\u0080-\u00bf]/.test(msg)) {
+    const fixed = Buffer.from(msg, 'latin1').toString('utf-8');
+    if (!fixed.includes('\ufffd')) msg = fixed;
+  }
+  msg = msg.replace(/<[^>]*>/g, ' ');
+  msg = msg.replace(/[\u0000-\u001f\u007f-\u009f\ufffd]/g, ' ').replace(/\s+/g, ' ').trim();
+  const readable = (msg.match(/[\p{L}\p{N}\p{P}\s]/gu) || []).length;
+  if (!msg || readable < msg.length * 0.8) return '翻译服务返回了无法识别的内容，请稍后再试或换一个翻译服务';
+  return msg.slice(0, 80);
+}
+
 export function t(key: Key, vars?: Record<string, string | number>): string {
   let s = (isChineseUI() ? ZH : EN)[key] ?? EN[key];
   if (vars) {

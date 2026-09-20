@@ -5,6 +5,9 @@ import { mapBatchesConcurrent } from '../batch';
 const BATCH_SIZE = 20;
 // Google 对单 IP 的免费接口有速率限制，4 路并发是实测下来既快又不触发 429 的档位。
 const MAX_CONCURRENCY = 4;
+/// 整段翻译之后一条就是一整段，20 段能有七八千字；Google 网页接口一次最多约 5000 字，
+/// 超了整批失败。按字数再切一刀。
+const BATCH_MAX_CHARS = 4500;
 let proxyInitialized = false;
 
 function getSystemProxy(): string | null {
@@ -64,7 +67,6 @@ export async function translateWithGoogle(
   ensureProxy();
   const { default: translate } = await import('google-translate-api-x');
 
-  let lastError: string | null = null;
   const batched = await mapBatchesConcurrent<string>(
     texts, BATCH_SIZE, MAX_CONCURRENCY,
     async (batch) => {
@@ -73,13 +75,9 @@ export async function translateWithGoogle(
       return Array.isArray(resAny) ? resAny.map((r: any) => r.text) : [resAny.text];
     },
     (err, batch) => {
-      lastError = err?.message || String(err);
-      console.error(`[Google] Batch failed (${batch.length} texts):`, lastError);
-    }
+      console.error(`[Google] Batch failed (${batch.length} texts):`, err?.message || err);
+    },
+    BATCH_MAX_CHARS
   );
-  const results = batched.flat();
-  if (lastError && results.every((r, i) => r === texts[i])) {
-    throw new Error(`Google Translate failed: ${lastError}`);
-  }
-  return results;
+  return batched.flat();
 }

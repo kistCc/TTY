@@ -1,7 +1,26 @@
 import { ProviderConfig } from '../config';
 import { request } from '../http';
+import { mapBatchesConcurrent, alignedOrOneByOne } from '../batch';
+
+/// 本地模型一次吃不下一整屏，和别家一样分批；本机算力有限，一批一批来，不并发。
+const BATCH_SIZE = 20;
+const BATCH_MAX_CHARS = 4000;
 
 export async function translateWithOllama(
+  texts: string[],
+  targetLang: string,
+  config: ProviderConfig
+): Promise<string[]> {
+  const batched = await mapBatchesConcurrent<string>(
+    texts, BATCH_SIZE, 1,
+    (batch) => translateBatch(batch, targetLang, config),
+    (err, batch) => console.error(`[Ollama] Batch failed (${batch.length} texts):`, err?.message || err),
+    BATCH_MAX_CHARS
+  );
+  return batched.flat();
+}
+
+async function translateBatch(
   texts: string[],
   targetLang: string,
   config: ProviderConfig
@@ -10,7 +29,7 @@ export async function translateWithOllama(
   const model = config.model || 'qwen2.5';
 
   const numbered = texts.map((t, i) => `${i + 1}. ${t}`).join('\n');
-  const prompt = `Translate the following texts to ${targetLang}. Return ONLY a JSON array of translated strings in the same order, no explanation.\n\n${numbered}`;
+  const prompt = `Translate the following texts to ${targetLang}. Return ONLY a JSON array of translated strings in the same order, no explanation. Keep proper nouns, brand names, URLs and numbers unchanged. Tokens like XQZ0, XQZ1 are placeholders for product names: copy them exactly.\n\n${numbered}`;
 
   const data = await request(`${baseUrl}/api/chat`, {
     method: 'POST',
@@ -25,20 +44,6 @@ export async function translateWithOllama(
     }),
   });
 
-  const content = data.message?.content?.trim();
-  return parseTranslationResponse(content, texts.length);
-}
-
-function parseTranslationResponse(content: string, expectedCount: number): string[] {
-  const jsonMatch = content.match(/\[[\s\S]*\]/);
-  if (jsonMatch) {
-    try {
-      const arr = JSON.parse(jsonMatch[0]);
-      if (Array.isArray(arr) && arr.length === expectedCount) {
-        return arr.map(String);
-      }
-    } catch {}
-  }
-  const lines = content.split('\n').filter(l => l.trim());
-  return lines.map(l => l.replace(/^\d+\.\s*/, '').trim()).slice(0, expectedCount);
+  const content = data.message?.content?.trim() || '';
+  return alignedOrOneByOne(content, texts, async t => (await translateBatch([t], targetLang, config))[0]);
 }

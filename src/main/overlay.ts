@@ -96,9 +96,27 @@ function getTargetDisplay() {
   return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
 }
 
+/// 顶部提示条的页面。一定要带 charset=utf-8 并整体 URL 编码：不带编码时中文按 Latin-1 解，
+/// "缓存已清空"、报错信息全成乱码；不编码的话报错里带 # 会被当成锚点截断，带 < 会把页面弄坏。
+function noticePage(text: string, bg: string): string {
+  const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const html = `<html><head><meta charset="utf-8"></head><body style="margin:0;background:transparent;display:flex;justify-content:center;align-items:center;height:100vh;"><div id="msg" style="background:${bg};color:white;padding:12px 24px;border-radius:10px;font-size:14px;font-family:-apple-system,'PingFang SC',sans-serif;white-space:nowrap;">${esc}</div></body></html>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
+/// 提示条宽度跟着字数走：中文约 14px 一个字，报错信息比进度提示长得多，固定 240 会被截掉。
+function noticeWidth(text: string): number {
+  let w = 0;
+  for (const ch of text) w += ch.charCodeAt(0) > 0x2e80 ? 14 : 8;
+  return Math.min(760, Math.max(240, w + 64));
+}
+
 export function showLoading(progress?: string) {
   const text = progress || t('translating');
   if (loadingWin && !loadingWin.isDestroyed()) {
+    const b = loadingWin.getBounds();
+    const w = noticeWidth(text);
+    if (w !== b.width) loadingWin.setBounds({ x: b.x + Math.round((b.width - w) / 2), y: b.y, width: w, height: b.height });
     loadingWin.webContents.executeJavaScript(
       `document.getElementById('msg').textContent = ${JSON.stringify(text)}`
     ).catch(() => {});
@@ -108,9 +126,10 @@ export function showLoading(progress?: string) {
   const d = getTargetDisplay();
   // Top centre, just under the menu bar, so it does not cover the text being translated.
   const wa = d.workArea;
+  const w = noticeWidth(text);
   loadingWin = new BrowserWindow({
-    width: 240, height: 56,
-    x: wa.x + Math.floor(wa.width / 2 - 120),
+    width: w, height: 56,
+    x: wa.x + Math.floor(wa.width / 2 - w / 2),
     y: wa.y + 16,
     frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true,
     hasShadow: false, resizable: false, movable: false, focusable: false,
@@ -119,7 +138,7 @@ export function showLoading(progress?: string) {
   loadingWin.setIgnoreMouseEvents(true);
   loadingWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   loadingWin.setAlwaysOnTop(true, 'screen-saver');
-  loadingWin.loadURL(`data:text/html,<html><body style="margin:0;background:transparent;display:flex;justify-content:center;align-items:center;height:100vh;"><div id="msg" style="background:rgba(0,0,0,0.8);color:white;padding:12px 24px;border-radius:10px;font-size:14px;font-family:-apple-system,sans-serif;white-space:nowrap;">${text}</div></body></html>`);
+  loadingWin.loadURL(noticePage(text, 'rgba(0,0,0,0.8)'));
   loadingWin.showInactive();
 }
 
@@ -142,7 +161,7 @@ export function showCancelled() {
   toast.setIgnoreMouseEvents(true);
   toast.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   toast.setAlwaysOnTop(true, 'screen-saver');
-  toast.loadURL(`data:text/html,<html><body style="margin:0;background:transparent;display:flex;justify-content:center;align-items:center;height:100vh;"><div style="background:rgba(0,0,0,0.7);color:white;padding:12px 24px;border-radius:10px;font-size:14px;font-family:-apple-system,sans-serif;">${t('cancelled')}</div></body></html>`);
+  toast.loadURL(noticePage(t('cancelled'), 'rgba(0,0,0,0.7)'));
   toast.showInactive();
   setTimeout(() => { if (!toast.isDestroyed()) toast.destroy(); }, 1500);
 }

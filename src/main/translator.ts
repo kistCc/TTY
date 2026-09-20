@@ -76,9 +76,18 @@ export async function translate(
   const translatedList = needTranslate.length
     ? await translateUnique(masked.map(m => m.text), targetLang, config)
     : [];
+  // 哪家翻译服务都可能把占位符弄丢（改写、删掉、翻成别的），丢了产品名就跟着消失。
+  // 丢了的那几条不带占位符原样重翻一次：产品名可能被音译，但至少不会凭空没了。
+  const lost = needTranslate.map((_, i) => i).filter(i =>
+    translatedList[i] && masked[i].brands.some((_, k) => !new RegExp(`XQZ${k}(?!\\d)`, 'i').test(translatedList[i])));
+  if (lost.length) {
+    const retried = await translateUnique(lost.map(i => needTranslate[i]), targetLang, config).catch(() => []);
+    lost.forEach((i, j) => { if (retried[j]) { translatedList[i] = retried[j]; masked[i].brands = []; } });
+  }
   const resultOf = new Map<string, string>();
   needTranslate.forEach((text, i) => {
-    resultOf.set(text, unmaskBrands(translatedList[i] ?? text, masked[i].brands));
+    // 没拿到译文（服务少返回了几条、那一批失败）就是空串，调用方会保留原文，不会拿原文冒充译文
+    resultOf.set(text, unmaskBrands(translatedList[i] ?? '', masked[i].brands));
   });
 
   return texts.map(text => resultOf.get(text) ?? text);
