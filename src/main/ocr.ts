@@ -10,6 +10,9 @@ export interface TextBlock {
   height: number;
   /// 字重：平均笔画宽度（原图像素，原生程序量的），0 表示量不出来
   weight?: number;
+  /// 原生程序在像素上确认过：它和左边那块之间是一大段空白（两个并排按钮、表格的两格），
+  /// 不是漏认了字。聚行、并段都不许把它和左边接起来。
+  gapBefore?: boolean;
 }
 
 export interface WindowRect { x: number; y: number; width: number; height: number; }

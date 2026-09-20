@@ -630,7 +630,7 @@ function clusterIntoLines(blocks: TextBlock[], screenWidth: number): TextBlock[]
         // object..."），留下的空当有三四个字高，按 2.5 倍判就把一行劈成两半了。
         const gap = part.x - (prev.x + prev.width);
         const limit = Math.max(prev.height, part.height) * 4;
-        if (gap > limit) flushSegment();
+        if (gap > limit || part.gapBefore) flushSegment();
       }
       segment.push(part);
     }
@@ -652,6 +652,7 @@ function mergeParts(parts: TextBlock[]): TextBlock {
     confidence: Math.min(...parts.map(b => b.confidence)),
     x, y, width: right - x, height: Math.min(bottom - y, cap),
     weight: lineWeight(parts),
+    gapBefore: parts[0].gapBefore,
   };
 }
 
@@ -695,7 +696,7 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
       // 另一栏），这里再无条件接上就把刚劈开的又粘回去。
       const gapX = Math.max(line.x, last.x) - Math.min(line.x + line.width, last.x + last.width);
       const sameVisualLine = pitch < Math.min(last.height, line.height) * 0.5
-        && gapX <= Math.max(last.height, line.height) * 4;
+        && gapX <= Math.max(last.height, line.height) * 4 && !line.gapBefore && !last.gapBefore;
       if (sameVisualLine) { if (pitch < bestPitch) { bestPitch = pitch; bestIdx = i; } continue; }
       if (line.height > last.height * 1.5 || line.height < last.height * 0.66) continue;
       if (endsShort(last, line, margin.get(last)!)) continue;

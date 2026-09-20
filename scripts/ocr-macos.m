@@ -240,9 +240,12 @@ int main(int argc, const char *argv[]) {
 
                 NSArray<NSDictionary *> *parts = splitAtBlankColumns(candidate.string, gray, origW, origH, x, y, w, h);
                 if (!parts) parts = @[@{ @"range": [NSValue valueWithRange:NSMakeRange(0, candidate.string.length)], @"x0": @(x), @"x1": @(x + w) }];
-                for (NSDictionary *part in parts) {
+                for (NSUInteger pi = 0; pi < parts.count; pi++) {
+                    NSDictionary *part = parts[pi];
                     double px0 = [part[@"x0"] doubleValue], pw = [part[@"x1"] doubleValue] - px0;
                     [results addObject:@{
+                        // 前面隔着一大段空白（像素确认过的，不是漏认的字），后面的步骤不要再把它们接起来
+                        @"gapBefore": @(pi > 0),
                         @"text": [candidate.string substringWithRange:[part[@"range"] rangeValue]],
                         @"confidence": @(candidate.confidence),
                         @"x": @(round(px0)), @"y": @(round(y)),
