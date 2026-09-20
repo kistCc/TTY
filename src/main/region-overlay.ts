@@ -7,6 +7,8 @@ const regionWindows = new Set<BrowserWindow>();
 export interface RegionOverlayData {
   screenshotPath: string;
   blocks: Array<{ text: string; translated: string; x: number; y: number; width: number; height: number }>;
+  /// 并段之前的原始块：渲染时先按它们把原文全擦掉，再画译文
+  eraseRects?: Array<{ x: number; y: number; width: number; height: number }>;
   regionX: number;      // global screen coords
   regionY: number;
   regionWidth: number;  // CSS pixels
@@ -102,6 +104,7 @@ export function showRegionOverlay(data: RegionOverlayData) {
   const send = () => {
     win.webContents.send('show-translation', {
       blocks: data.blocks,
+      eraseRects: data.eraseRects,
       screenshotDataUrl,
       regionWidth: data.regionWidth,
       regionHeight: data.regionHeight,

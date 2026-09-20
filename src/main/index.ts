@@ -1043,7 +1043,7 @@ async function handleRegionTranslate() {
     }
 
     showLoading(t('translatingPct', { n: 70 }));
-    const paragraphs = groupIntoParagraphs(blocksToTranslate, selection.width);
+    const paragraphs = groupIntoParagraphs(dropDuplicateBoxes(dropLowConfidenceOverlaps(dropUndersizedBoxes(dropOversizedBoxes(blocksToTranslate)))), selection.width);
     const texts = paragraphs.map(b => b.text);
     const translations = await translate(texts, targetLang, config);
 
@@ -1059,6 +1059,7 @@ async function handleRegionTranslate() {
     showRegionOverlay({
       screenshotPath,
       blocks: translatedBlocks,
+      eraseRects: cssBlocks,
       regionX: selection.x,
       regionY: selection.y,
       regionWidth: selection.width,

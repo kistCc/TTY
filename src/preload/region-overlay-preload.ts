@@ -7,6 +7,13 @@ contextBridge.exposeInMainWorld('api', {
   close: () => {
     ipcRenderer.send('region-overlay-close');
   },
+  // 区域浮层和全屏浮层共用 overlay.js，它用的是 dismiss / onClear 这两个名字
+  dismiss: () => {
+    ipcRenderer.send('region-overlay-close');
+  },
+  onClear: (callback: () => void) => {
+    ipcRenderer.on('clear', () => callback());
+  },
   moveBy: (dx: number, dy: number) => {
     ipcRenderer.send('region-overlay-move-by', { dx, dy });
   },

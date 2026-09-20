@@ -25,8 +25,9 @@ function keepAsIs(text: string): boolean {
 }
 
 
-/// 句内的产品名换成 ⟦0⟧ 这种占位符。用方括号类符号是因为翻译服务会原样带过去，
-/// 不会当成词去翻，也不会被拆开。
+/// 句内的产品名换成 XQZ0 这种占位符再发。实测有道会把 ⟦0⟧、{0}、[0]、<0> 这类
+/// 括号占位符删掉或改掉（"Claude" 就此消失、被译成"你"），而字母+数字的生造词
+/// 它会当专有名词原样带回来。
 const BRAND_PATTERNS = [
   /\bClaude Code\b/g, /\bClaude\b/g, /\bChatGPT\b/g, /\bAnthropic\b/g, /\bOpenAI\b/g,
   /\bGitHub\b/g, /\bmacOS\b/g, /\biOS\b/g, /\bTTY\b/g, /\bCowork\b/g,
@@ -38,7 +39,7 @@ function maskBrands(text: string): { text: string; brands: string[] } {
   for (const re of BRAND_PATTERNS) {
     masked = masked.replace(re, (hit) => {
       brands.push(hit);
-      return `\u27E6${brands.length - 1}\u27E7`;
+      return `XQZ${brands.length - 1}`;
     });
   }
   return { text: masked, brands };
@@ -46,7 +47,7 @@ function maskBrands(text: string): { text: string; brands: string[] } {
 
 function unmaskBrands(text: string, brands: string[]): string {
   if (!brands.length) return text;
-  return text.replace(/\u27E6\s*(\d+)\s*\u27E7/g, (whole, n) => brands[Number(n)] ?? whole);
+  return text.replace(/XQZ(\d+)/gi, (whole, n) => brands[Number(n)] ?? whole);
 }
 
 export async function translate(

@@ -11,7 +11,7 @@ html, body {
   font-family: -apple-system, sans-serif;
   cursor: move;
 }
-#canvas {
+#result {
   display: block;
   width: 100%;
   height: 100%;
@@ -37,8 +37,13 @@ html, body {
 </style>
 </head>
 <body>
-<canvas id="canvas"></canvas>
+<canvas id="result"></canvas>
 <div id="toast"></div>
-<script src="region-overlay.js"></script>
+<!-- 和全屏浮层用同一套渲染：按段折行、字号跟原文、先擦后画 -->
+<script src="overlay.js"></script>
+<script>
+  // 区域浮层额外支持 Esc 关闭
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.api.close(); });
+</script>
 </body>
 </html>

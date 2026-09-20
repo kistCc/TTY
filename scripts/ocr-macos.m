@@ -54,6 +54,38 @@ static int listWindows(pid_t selfPid) {
     return 0;
 }
 
+/// 按词间空白把一个识别结果拆成几段（返回字符范围）。空白超过两倍字高才拆。
+/// 框的坐标是归一化的，横竖各按各自的边长归一，比较前先乘回像素（pxW / pxH）。
+static NSArray<NSValue *> *splitAtWideGaps(VNRecognizedText *t, CGRect whole, CGFloat pxW, CGFloat pxH) {
+    NSString *str = t.string;
+    NSMutableArray<NSValue *> *words = [NSMutableArray array];
+    [str enumerateSubstringsInRange:NSMakeRange(0, str.length)
+                            options:NSStringEnumerationByWords
+                         usingBlock:^(NSString *w, NSRange r, NSRange er, BOOL *stop) {
+        [words addObject:[NSValue valueWithRange:r]];
+    }];
+    if (words.count < 2) return @[[NSValue valueWithRange:NSMakeRange(0, str.length)]];
+
+    NSMutableArray<NSValue *> *out = [NSMutableArray array];
+    NSUInteger segStart = 0;
+    CGFloat prevRight = -1;
+    for (NSValue *v in words) {
+        NSRange r = v.rangeValue;
+        VNRectangleObservation *rb = [t boundingBoxForRange:r error:nil];
+        if (!rb) return @[[NSValue valueWithRange:NSMakeRange(0, str.length)]];
+        CGRect wb = rb.boundingBox;
+        if (prevRight >= 0 && (wb.origin.x - prevRight) * pxW > whole.size.height * pxH * 2) {
+            NSUInteger end = r.location;
+            while (end > segStart && [[NSCharacterSet whitespaceCharacterSet] characterIsMember:[str characterAtIndex:end - 1]]) end--;
+            [out addObject:[NSValue valueWithRange:NSMakeRange(segStart, end - segStart)]];
+            segStart = r.location;
+        }
+        prevRight = wb.origin.x + wb.size.width;
+    }
+    [out addObject:[NSValue valueWithRange:NSMakeRange(segStart, str.length - segStart)]];
+    return out;
+}
+
 /// 在图的某个区域（归一化坐标，原点左下）里认字。每次都新建 handler。
 static NSArray *recognize(CGImageRef img, CGRect roi, NSError **error) {
     VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
@@ -156,24 +188,34 @@ int main(int argc, const char *argv[]) {
                 VNRecognizedText *candidate = [[obs topCandidates:1] firstObject];
                 if (!candidate || candidate.confidence < 0.2) continue;
 
-                // boundingBox 是相对 regionOfInterest 的，换回整图的归一化坐标
-                CGRect b = obs.boundingBox;
-                CGRect box = CGRectMake(roi.origin.x + b.origin.x * roi.size.width,
-                                        roi.origin.y + b.origin.y * roi.size.height,
-                                        b.size.width * roi.size.width,
-                                        b.size.height * roi.size.height);
-                double x = box.origin.x * imgW / scale;
-                double y = (1.0 - box.origin.y - box.size.height) * imgH / scale;
-                double w = box.size.width * imgW / scale;
-                double h = box.size.height * imgH / scale;
+                // Vision 会把同一水平线上挨得不远的几样东西认成一个框（两个并排按钮
+                // "Later Next"、表格同一行的两格）。正常词距约是字高的三分之一，
+                // 词与词之间空出两倍字高以上，就不是同一句话，从那里拆开。
+                for (NSValue *seg in splitAtWideGaps(candidate, obs.boundingBox, imgW * roi.size.width, imgH * roi.size.height)) {
+                    NSRange r = seg.rangeValue;
+                    CGRect b = obs.boundingBox;
+                    if (r.length < candidate.string.length) {
+                        VNRectangleObservation *rb = [candidate boundingBoxForRange:r error:nil];
+                        if (rb) b = rb.boundingBox;
+                    }
+                    // boundingBox 是相对 regionOfInterest 的，换回整图的归一化坐标
+                    CGRect box = CGRectMake(roi.origin.x + b.origin.x * roi.size.width,
+                                            roi.origin.y + b.origin.y * roi.size.height,
+                                            b.size.width * roi.size.width,
+                                            b.size.height * roi.size.height);
+                    double x = box.origin.x * imgW / scale;
+                    double y = (1.0 - box.origin.y - box.size.height) * imgH / scale;
+                    double w = box.size.width * imgW / scale;
+                    double h = box.size.height * imgH / scale;
 
-                [results addObject:@{
-                    @"text": candidate.string,
-                    @"confidence": @(candidate.confidence),
-                    @"x": @(round(x)), @"y": @(round(y)),
-                    @"width": @(round(w)), @"height": @(round(h)),
-                    @"weight": @(strokeWeight(gray, origW, origH, x, y, w, h))
-                }];
+                    [results addObject:@{
+                        @"text": [candidate.string substringWithRange:r],
+                        @"confidence": @(candidate.confidence),
+                        @"x": @(round(x)), @"y": @(round(y)),
+                        @"width": @(round(w)), @"height": @(round(h)),
+                        @"weight": @(strokeWeight(gray, origW, origH, x, y, w, h))
+                    }];
+                }
             }
         }
 
