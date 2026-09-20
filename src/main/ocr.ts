@@ -8,7 +8,7 @@ export interface TextBlock {
   y: number;
   width: number;
   height: number;
-  /// 字重：平均笔画宽度 ÷ 字高（原生程序量的），0 表示量不出来
+  /// 字重：平均笔画宽度（原图像素，原生程序量的），0 表示量不出来
   weight?: number;
 }
 

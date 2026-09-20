@@ -2,8 +2,9 @@
 #import <Vision/Vision.h>
 #import <AppKit/AppKit.h>
 
-/// 笔画粗细：框里墨迹面积 × 2 ÷ 墨迹边界像素数，约等于平均笔画宽度，跟是哪些字母无关；
-/// 再除以框高，得到跟字号无关的"字重"。粗体大约是常规体的 1.5 倍。
+/// 笔画粗细：框里墨迹面积 × 2 ÷ 墨迹边界像素数，约等于平均笔画宽度（像素），跟是哪些字母无关。
+/// 粗体大约是同字号常规体的 1.5 倍。不除以框高：框高会被上标、带下行的字母撑高，
+/// 除了反而不准；比较字重的地方本来就只比字号相近的两行。
 /// 墨迹 = 框内跟背景差得远的像素；背景取框内亮度的中位数（文字只占框的一小部分）。
 static double strokeWeight(const uint8_t *gray, size_t W, size_t H, double x, double y, double w, double h) {
     long x0 = MAX(0, (long)x), y0 = MAX(0, (long)y);
@@ -29,7 +30,7 @@ static double strokeWeight(const uint8_t *gray, size_t W, size_t H, double x, do
     }
     #undef INK
     if (!edge) return 0;
-    return (2.0 * area / edge) / (y1 - y0);
+    return 2.0 * area / edge;
 }
 
 /// `ocr-macos --windows <自己的pid>`：屏幕上可见的窗口（含浮动面板），从前到后，全局坐标（点）。
@@ -54,35 +55,71 @@ static int listWindows(pid_t selfPid) {
     return 0;
 }
 
-/// 按词间空白把一个识别结果拆成几段（返回字符范围）。空白超过两倍字高才拆。
-/// 框的坐标是归一化的，横竖各按各自的边长归一，比较前先乘回像素（pxW / pxH）。
-static NSArray<NSValue *> *splitAtWideGaps(VNRecognizedText *t, CGRect whole, CGFloat pxW, CGFloat pxH) {
-    NSString *str = t.string;
-    NSMutableArray<NSValue *> *words = [NSMutableArray array];
-    [str enumerateSubstringsInRange:NSMakeRange(0, str.length)
-                            options:NSStringEnumerationByWords
-                         usingBlock:^(NSString *w, NSRange r, NSRange er, BOOL *stop) {
-        [words addObject:[NSValue valueWithRange:r]];
-    }];
-    if (words.count < 2) return @[[NSValue valueWithRange:NSMakeRange(0, str.length)]];
+/// 按像素把一个识别结果在"宽空白"处拆开（两个并排按钮 "Later Next"、表格同一行的两格）。
+/// 空白 = 框内上下一样颜色的一列（蓝底、按钮里的白底都算）；连续空白超过两倍字高才拆，
+/// 正常词距只有字高的三分之一左右。文字在哪个空格处断，按字符位置比例找最近的空格。
+/// Vision 的 boundingBoxForRange 在这里靠不住（常常直接返回整行的框），所以不用它。
+/// 返回 @[{range, x0, x1}]，x 是原图像素；不需要拆时返回 nil。
+static NSArray<NSDictionary *> *splitAtBlankColumns(NSString *str, const uint8_t *gray, size_t W, size_t H,
+                                                    double x, double y, double w, double h) {
+    long x0 = MAX(0, (long)x), x1 = MIN((long)W, (long)(x + w));
+    long y0 = MAX(0, (long)y), y1 = MIN((long)H, (long)(y + h));
+    long bh = y1 - y0;
+    if (bh < 4 || x1 - x0 < bh * 3) return nil;
+    if ([str rangeOfCharacterFromSet:[NSCharacterSet whitespaceCharacterSet]].location == NSNotFound) return nil;
 
-    NSMutableArray<NSValue *> *out = [NSMutableArray array];
-    NSUInteger segStart = 0;
-    CGFloat prevRight = -1;
-    for (NSValue *v in words) {
-        NSRange r = v.rangeValue;
-        VNRectangleObservation *rb = [t boundingBoxForRange:r error:nil];
-        if (!rb) return @[[NSValue valueWithRange:NSMakeRange(0, str.length)]];
-        CGRect wb = rb.boundingBox;
-        if (prevRight >= 0 && (wb.origin.x - prevRight) * pxW > whole.size.height * pxH * 2) {
-            NSUInteger end = r.location;
-            while (end > segStart && [[NSCharacterSet whitespaceCharacterSet] characterIsMember:[str characterAtIndex:end - 1]]) end--;
-            [out addObject:[NSValue valueWithRange:NSMakeRange(segStart, end - segStart)]];
-            segStart = r.location;
-        }
-        prevRight = wb.origin.x + wb.size.width;
+    // 每一列是不是"空白"
+    long n = x1 - x0;
+    BOOL *blank = calloc(n, sizeof(BOOL));
+    for (long cx = x0; cx < x1; cx++) {
+        int lo = 255, hi = 0;
+        for (long cy = y0; cy < y1; cy++) { int v = gray[cy * W + cx]; if (v < lo) lo = v; if (v > hi) hi = v; }
+        blank[cx - x0] = (hi - lo) < 24;
     }
-    [out addObject:[NSValue valueWithRange:NSMakeRange(segStart, str.length - segStart)]];
+    // 找内部的宽空白，得到若干段有字的区间
+    NSMutableArray<NSArray *> *spans = [NSMutableArray array];   // @[start, end]，列号
+    long segStart = -1, runStart = -1;
+    for (long i = 0; i <= n; i++) {
+        BOOL b = (i == n) || blank[i];
+        if (!b) { if (segStart < 0) segStart = i; if (runStart >= 0) runStart = -1; continue; }
+        if (runStart < 0) runStart = i;
+        BOOL wide = (i == n) || (i - runStart + 1 > bh * 2 && i + 1 < n && !blank[i + 1]);
+        if (segStart >= 0 && wide) {
+            [spans addObject:@[@(segStart), @(runStart)]];
+            segStart = -1;
+        }
+    }
+    free(blank);
+    if (spans.count < 2) return nil;
+
+    // 词（按空白切）和它们在字符串里的比例位置
+    NSMutableArray<NSValue *> *tokens = [NSMutableArray array];
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"\\S+" options:0 error:nil];
+    for (NSTextCheckingResult *m in [re matchesInString:str options:0 range:NSMakeRange(0, str.length)]) [tokens addObject:[NSValue valueWithRange:m.range]];
+    if (tokens.count < spans.count) return nil;
+
+    double total = str.length;
+    double first = [spans.firstObject[0] doubleValue], last = [spans.lastObject[1] doubleValue];
+    NSMutableArray<NSMutableArray *> *assign = [NSMutableArray array];
+    for (NSUInteger k = 0; k < spans.count; k++) [assign addObject:[NSMutableArray array]];
+    for (NSValue *tv in tokens) {
+        NSRange r = tv.rangeValue;
+        double pos = first + (last - first) * (r.location + r.length / 2.0) / total;   // 估计的像素列
+        NSUInteger best = 0; double bestD = INFINITY;
+        for (NSUInteger k = 0; k < spans.count; k++) {
+            double s0 = [spans[k][0] doubleValue], s1 = [spans[k][1] doubleValue];
+            double d = pos < s0 ? s0 - pos : (pos > s1 ? pos - s1 : 0);
+            if (d < bestD) { bestD = d; best = k; }
+        }
+        [assign[best] addObject:tv];
+    }
+    NSMutableArray<NSDictionary *> *out = [NSMutableArray array];
+    for (NSUInteger k = 0; k < spans.count; k++) {
+        if (![assign[k] count]) return nil;   // 某段分不到词，说明比例估得不对，不拆
+        NSRange a0 = [assign[k].firstObject rangeValue], a1 = [assign[k].lastObject rangeValue];
+        [out addObject:@{ @"range": [NSValue valueWithRange:NSMakeRange(a0.location, NSMaxRange(a1) - a0.location)],
+                          @"x0": @(x0 + [spans[k][0] longValue]), @"x1": @(x0 + [spans[k][1] longValue]) }];
+    }
     return out;
 }
 
@@ -188,32 +225,27 @@ int main(int argc, const char *argv[]) {
                 VNRecognizedText *candidate = [[obs topCandidates:1] firstObject];
                 if (!candidate || candidate.confidence < 0.2) continue;
 
-                // Vision 会把同一水平线上挨得不远的几样东西认成一个框（两个并排按钮
-                // "Later Next"、表格同一行的两格）。正常词距约是字高的三分之一，
-                // 词与词之间空出两倍字高以上，就不是同一句话，从那里拆开。
-                for (NSValue *seg in splitAtWideGaps(candidate, obs.boundingBox, imgW * roi.size.width, imgH * roi.size.height)) {
-                    NSRange r = seg.rangeValue;
-                    CGRect b = obs.boundingBox;
-                    if (r.length < candidate.string.length) {
-                        VNRectangleObservation *rb = [candidate boundingBoxForRange:r error:nil];
-                        if (rb) b = rb.boundingBox;
-                    }
-                    // boundingBox 是相对 regionOfInterest 的，换回整图的归一化坐标
-                    CGRect box = CGRectMake(roi.origin.x + b.origin.x * roi.size.width,
-                                            roi.origin.y + b.origin.y * roi.size.height,
-                                            b.size.width * roi.size.width,
-                                            b.size.height * roi.size.height);
-                    double x = box.origin.x * imgW / scale;
-                    double y = (1.0 - box.origin.y - box.size.height) * imgH / scale;
-                    double w = box.size.width * imgW / scale;
-                    double h = box.size.height * imgH / scale;
+                // boundingBox 是相对 regionOfInterest 的，换回整图的归一化坐标
+                CGRect b = obs.boundingBox;
+                CGRect box = CGRectMake(roi.origin.x + b.origin.x * roi.size.width,
+                                        roi.origin.y + b.origin.y * roi.size.height,
+                                        b.size.width * roi.size.width,
+                                        b.size.height * roi.size.height);
+                double x = box.origin.x * imgW / scale;
+                double y = (1.0 - box.origin.y - box.size.height) * imgH / scale;
+                double w = box.size.width * imgW / scale;
+                double h = box.size.height * imgH / scale;
 
+                NSArray<NSDictionary *> *parts = splitAtBlankColumns(candidate.string, gray, origW, origH, x, y, w, h);
+                if (!parts) parts = @[@{ @"range": [NSValue valueWithRange:NSMakeRange(0, candidate.string.length)], @"x0": @(x), @"x1": @(x + w) }];
+                for (NSDictionary *part in parts) {
+                    double px0 = [part[@"x0"] doubleValue], pw = [part[@"x1"] doubleValue] - px0;
                     [results addObject:@{
-                        @"text": [candidate.string substringWithRange:r],
+                        @"text": [candidate.string substringWithRange:[part[@"range"] rangeValue]],
                         @"confidence": @(candidate.confidence),
-                        @"x": @(round(x)), @"y": @(round(y)),
-                        @"width": @(round(w)), @"height": @(round(h)),
-                        @"weight": @(strokeWeight(gray, origW, origH, x, y, w, h))
+                        @"x": @(round(px0)), @"y": @(round(y)),
+                        @"width": @(round(pw)), @"height": @(round(h)),
+                        @"weight": @(strokeWeight(gray, origW, origH, px0, y, pw, h))
                     }];
                 }
             }
