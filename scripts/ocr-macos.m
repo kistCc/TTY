@@ -55,74 +55,18 @@ static int listWindows(pid_t selfPid) {
     return 0;
 }
 
-/// 按像素把一个识别结果在"宽空白"处拆开（两个并排按钮 "Later Next"、表格同一行的两格）。
-/// 空白 = 框内上下一样颜色的一列（蓝底、按钮里的白底都算）；连续空白超过一个字高才拆，
-/// 正常词距只有字高的三分之一左右，一个字高已经是三个空格那么宽。文字在哪个空格处断，按字符位置比例找最近的空格。
-/// Vision 的 boundingBoxForRange 在这里靠不住（常常直接返回整行的框），所以不用它。
-/// 返回 @[{range, x0, x1}]，x 是原图像素；不需要拆时返回 nil。
-static NSArray<NSDictionary *> *splitAtBlankColumns(NSString *str, const uint8_t *gray, size_t W, size_t H,
-                                                    double x, double y, double w, double h) {
-    long x0 = MAX(0, (long)x), x1 = MIN((long)W, (long)(x + w));
-    long y0 = MAX(0, (long)y), y1 = MIN((long)H, (long)(y + h));
-    long bh = y1 - y0;
-    if (bh < 4 || x1 - x0 < bh * 3) return nil;
-    if ([str rangeOfCharacterFromSet:[NSCharacterSet whitespaceCharacterSet]].location == NSNotFound) return nil;
-
-    // 每一列是不是"空白"。只看中间那一截行：字母都在那里，框的上下边缘常常蹭到
-    // 旁边的底色（按钮的白底比文字框矮一点，边上就是蓝的），会让空白列看起来不纯。
-    long n = x1 - x0;
-    long my0 = y0 + bh / 4, my1 = y1 - bh / 4;
-    BOOL *blank = calloc(n, sizeof(BOOL));
+/// 两个框之间（同一行）的空白有多宽：取中间那一截行，找最长的一段"上下同色"的列。
+static long longestBlankRun(const uint8_t *gray, size_t W, size_t H, long x0, long x1, long y0, long y1) {
+    x0 = MAX(0, x0); x1 = MIN((long)W, x1); y0 = MAX(0, y0); y1 = MIN((long)H, y1);
+    long bh = y1 - y0, my0 = y0 + bh / 4, my1 = y1 - bh / 4;
+    long best = 0, run = 0;
     for (long cx = x0; cx < x1; cx++) {
         int lo = 255, hi = 0;
         for (long cy = my0; cy < my1; cy++) { int v = gray[cy * W + cx]; if (v < lo) lo = v; if (v > hi) hi = v; }
-        blank[cx - x0] = (hi - lo) < 24;
+        run = (hi - lo) < 24 ? run + 1 : 0;
+        if (run > best) best = run;
     }
-    // 找内部的宽空白，得到若干段有字的区间
-    NSMutableArray<NSArray *> *spans = [NSMutableArray array];   // @[start, end]，列号
-    long segStart = -1, runStart = -1;
-    for (long i = 0; i <= n; i++) {
-        BOOL b = (i == n) || blank[i];
-        if (!b) { if (segStart < 0) segStart = i; if (runStart >= 0) runStart = -1; continue; }
-        if (runStart < 0) runStart = i;
-        BOOL wide = (i == n) || (i - runStart + 1 > bh && i + 1 < n && !blank[i + 1]);
-        if (segStart >= 0 && wide) {
-            [spans addObject:@[@(segStart), @(runStart)]];
-            segStart = -1;
-        }
-    }
-    free(blank);
-    if (spans.count < 2) return nil;
-
-    // 词（按空白切）和它们在字符串里的比例位置
-    NSMutableArray<NSValue *> *tokens = [NSMutableArray array];
-    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"\\S+" options:0 error:nil];
-    for (NSTextCheckingResult *m in [re matchesInString:str options:0 range:NSMakeRange(0, str.length)]) [tokens addObject:[NSValue valueWithRange:m.range]];
-    if (tokens.count < spans.count) return nil;
-
-    double total = str.length;
-    double first = [spans.firstObject[0] doubleValue], last = [spans.lastObject[1] doubleValue];
-    NSMutableArray<NSMutableArray *> *assign = [NSMutableArray array];
-    for (NSUInteger k = 0; k < spans.count; k++) [assign addObject:[NSMutableArray array]];
-    for (NSValue *tv in tokens) {
-        NSRange r = tv.rangeValue;
-        double pos = first + (last - first) * (r.location + r.length / 2.0) / total;   // 估计的像素列
-        NSUInteger best = 0; double bestD = INFINITY;
-        for (NSUInteger k = 0; k < spans.count; k++) {
-            double s0 = [spans[k][0] doubleValue], s1 = [spans[k][1] doubleValue];
-            double d = pos < s0 ? s0 - pos : (pos > s1 ? pos - s1 : 0);
-            if (d < bestD) { bestD = d; best = k; }
-        }
-        [assign[best] addObject:tv];
-    }
-    NSMutableArray<NSDictionary *> *out = [NSMutableArray array];
-    for (NSUInteger k = 0; k < spans.count; k++) {
-        if (![assign[k] count]) return nil;   // 某段分不到词，说明比例估得不对，不拆
-        NSRange a0 = [assign[k].firstObject rangeValue], a1 = [assign[k].lastObject rangeValue];
-        [out addObject:@{ @"range": [NSValue valueWithRange:NSMakeRange(a0.location, NSMaxRange(a1) - a0.location)],
-                          @"x0": @(x0 + [spans[k][0] longValue]), @"x1": @(x0 + [spans[k][1] longValue]) }];
-    }
-    return out;
+    return best;
 }
 
 /// 在图的某个区域（归一化坐标，原点左下）里认字。每次都新建 handler。
@@ -238,24 +182,37 @@ int main(int argc, const char *argv[]) {
                 double w = box.size.width * imgW / scale;
                 double h = box.size.height * imgH / scale;
 
-                NSArray<NSDictionary *> *parts = splitAtBlankColumns(candidate.string, gray, origW, origH, x, y, w, h);
-                if (!parts) parts = @[@{ @"range": [NSValue valueWithRange:NSMakeRange(0, candidate.string.length)], @"x0": @(x), @"x1": @(x + w) }];
-                for (NSUInteger pi = 0; pi < parts.count; pi++) {
-                    NSDictionary *part = parts[pi];
-                    double px0 = [part[@"x0"] doubleValue], pw = [part[@"x1"] doubleValue] - px0;
-                    [results addObject:@{
-                        // 前面隔着一大段空白（像素确认过的，不是漏认的字），后面的步骤不要再把它们接起来
-                        @"gapBefore": @(pi > 0),
-                        @"text": [candidate.string substringWithRange:[part[@"range"] rangeValue]],
-                        @"confidence": @(candidate.confidence),
-                        @"x": @(round(px0)), @"y": @(round(y)),
-                        @"width": @(round(pw)), @"height": @(round(h)),
-                        @"weight": @(strokeWeight(gray, origW, origH, px0, y, pw, h))
-                    }];
-                }
+                [results addObject:[@{
+                    @"text": candidate.string,
+                    @"confidence": @(candidate.confidence),
+                    @"x": @(round(x)), @"y": @(round(y)),
+                    @"width": @(round(w)), @"height": @(round(h)),
+                    @"weight": @(strokeWeight(gray, origW, origH, x, y, w, h))
+                } mutableCopy]];
             }
         }
 
+        // 同一行上相邻的两个框之间如果是一大段空白（超过一个字高），就标记右边那个：
+        // 这是两样东西（并排的按钮、表格的两格），不是漏认了中间的词——漏认的地方是有字的。
+        // 后面聚行时的"空当不超过 4 倍字高就接上"不会跨过这个标记。
+        for (NSUInteger i = 0; i < results.count; i++) {
+            NSMutableDictionary *b = results[i];
+            double bx = [b[@"x"] doubleValue], by = [b[@"y"] doubleValue], bh = [b[@"height"] doubleValue];
+            double bestRight = -1;
+            for (NSDictionary *a in results) {
+                double ax = [a[@"x"] doubleValue], ay = [a[@"y"] doubleValue], ah = [a[@"height"] doubleValue];
+                double ar = ax + [a[@"width"] doubleValue];
+                if (ar > bx || ar <= bestRight) continue;
+                double ov = MIN(ay + ah, by + bh) - MAX(ay, by);
+                if (ov < MIN(ah, bh) * 0.5) continue;
+                bestRight = ar;
+            }
+            if (bestRight >= 0 && bx - bestRight > bh
+                && longestBlankRun(gray, origW, origH, (long)bestRight, (long)bx, (long)by, (long)(by + bh)) > bh) {
+                b[@"gapBefore"] = @YES;
+            }
+        }
+        free(gray);
         if (ocrImage != cgImage) CGImageRelease(ocrImage);
 
         NSData *jsonData = [NSJSONSerialization dataWithJSONObject:results options:0 error:nil];
