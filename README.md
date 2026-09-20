@@ -7,7 +7,7 @@
 <p align="center"><strong>贴图翻译 · macOS 屏幕翻译工具 · 全屏翻译 · 选区翻译 · 像素级原位覆盖</strong></p>
 
 <p align="center">
-  <a href="https://github.com/kistCc/TTY/releases/latest"><img src="https://img.shields.io/badge/Release-v1.3.4-blue?style=flat" alt="Release"></a>
+  <a href="https://github.com/kistCc/TTY/releases/latest"><img src="https://img.shields.io/badge/Release-v1.3.5-blue?style=flat" alt="Release"></a>
   <a href="https://github.com/kistCc/TTY/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey?style=flat" alt="macOS">
   <img src="https://img.shields.io/badge/Electron-33-47848f?style=flat" alt="Electron">
@@ -26,7 +26,7 @@
 上游作者 **[@Archer-SQ](https://github.com/Archer-SQ)**，原项目以 MIT 许可证发布。
 截图、OCR、翻译、像素级原位覆盖这套核心设计全部来自上游，在此致谢。
 
-本仓库基于上游 v1.2.3，当前版本 v1.3.4。主要改动：
+本仓库基于上游 v1.2.3，当前版本 v1.3.5。主要改动：
 
 | 改动 | 说明 |
 |---|---|
@@ -47,6 +47,8 @@
 | **深色页面不再整片漏字** | 去掉了 OCR 前的「对比度+锐化」预处理——它会让深色背景的页面整片认不出字；整屏按横条分片识别，改在原生程序里用 Vision 的 `regionOfInterest` 完成 |
 | **按排版常识分段** | 上一行明明放得下下一个词却换行 = 段落结束；列表记号开头另起一条；段间距按这一页自己的单倍行距判断；字重不同（粗体标题/标签）不并段。设置页、FAQ、列表、书信不再并成一大团 |
 | **不同窗口的字不串** | 截图那一刻记下各窗口位置，不同窗口里的字永远不会被接成一句 |
+| **区域翻译与全屏一致** | 区域截图翻译改用全屏同一套渲染（按段折行、字号跟原文、不再横向压扁）；并排的按钮按像素空白分开，不再连成一句 |
+| **六家翻译服务统一** | 有道 / Google / DeepL / OpenAI / Claude / Ollama 统一分批、条数对不上逐条重翻、失败保留原文、产品名不丢；报错显示成一句人话，不再是乱码 |
 
 完整改动见 commit 历史；第一个 commit 是上游 v1.2.3 的原始状态，可直接 diff。
 
