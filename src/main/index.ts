@@ -729,6 +729,7 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
       x, y, width: right - x, height: bottom - y,
       lineHeight: medianHeight(group),
       lineCount: group.length,
+      weight: lineWeight(group),
     };
   });
 }

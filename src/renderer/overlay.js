@@ -47,6 +47,8 @@ window.api.onShowTranslation((data) => {
     // 小得看不清的字挤在正文中间。字号仍然跟着原文走（标题还是比正文大），
     // 只是限制在整屏行高的一个合理区间里。
     const minLineH = medianLineH ? medianLineH * 0.6 : 0;
+    const sortedWeight = px.map(p => p.block.weight || 0).filter(w => w > 0).sort((a, b) => a - b);
+    const medianWeight = sortedWeight.length ? sortedWeight[Math.floor(sortedWeight.length / 2)] : 0;
 
     // 先按"并段之前的原始块"把原文统统擦掉。没并进任何段落的碎块不会画译文，
     // 不擦的话它那块英文就留在屏幕上了。
@@ -71,7 +73,9 @@ window.api.onShowTranslation((data) => {
       // OCR 会把一行切成好几块、高度参差不齐，一个偏高的框就会把同行别的块的
       // 字号顶上去，画出一串压在别人身上的大字。谁都不许比自己那个框大太多。
       const baseH = isParagraph ? p.lineH : Math.min(rowH, p.lineH * 1.25);
-      const isBold = baseH > 44;
+      // 原文是粗体才画粗体：笔画明显比这一屏的普通文字粗（1.25 倍以上）。
+      // 以前按"行高超过 44 像素"判断，字大一点的正文也被画成粗体。
+      const isBold = medianWeight > 0 && (block.weight || 0) > medianWeight * 1.25;
       const weight = isBold ? 'bold' : 'normal';
       const fontFamily = '-apple-system, "PingFang SC", "Hiragino Sans GB", sans-serif';
       const clampedH = Math.min(Math.max(baseH, minLineH), maxLineH);

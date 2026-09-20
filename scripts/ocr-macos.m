@@ -56,8 +56,8 @@ static int listWindows(pid_t selfPid) {
 }
 
 /// 按像素把一个识别结果在"宽空白"处拆开（两个并排按钮 "Later Next"、表格同一行的两格）。
-/// 空白 = 框内上下一样颜色的一列（蓝底、按钮里的白底都算）；连续空白超过两倍字高才拆，
-/// 正常词距只有字高的三分之一左右。文字在哪个空格处断，按字符位置比例找最近的空格。
+/// 空白 = 框内上下一样颜色的一列（蓝底、按钮里的白底都算）；连续空白超过一个字高才拆，
+/// 正常词距只有字高的三分之一左右，一个字高已经是三个空格那么宽。文字在哪个空格处断，按字符位置比例找最近的空格。
 /// Vision 的 boundingBoxForRange 在这里靠不住（常常直接返回整行的框），所以不用它。
 /// 返回 @[{range, x0, x1}]，x 是原图像素；不需要拆时返回 nil。
 static NSArray<NSDictionary *> *splitAtBlankColumns(NSString *str, const uint8_t *gray, size_t W, size_t H,
@@ -68,12 +68,14 @@ static NSArray<NSDictionary *> *splitAtBlankColumns(NSString *str, const uint8_t
     if (bh < 4 || x1 - x0 < bh * 3) return nil;
     if ([str rangeOfCharacterFromSet:[NSCharacterSet whitespaceCharacterSet]].location == NSNotFound) return nil;
 
-    // 每一列是不是"空白"
+    // 每一列是不是"空白"。只看中间那一截行：字母都在那里，框的上下边缘常常蹭到
+    // 旁边的底色（按钮的白底比文字框矮一点，边上就是蓝的），会让空白列看起来不纯。
     long n = x1 - x0;
+    long my0 = y0 + bh / 4, my1 = y1 - bh / 4;
     BOOL *blank = calloc(n, sizeof(BOOL));
     for (long cx = x0; cx < x1; cx++) {
         int lo = 255, hi = 0;
-        for (long cy = y0; cy < y1; cy++) { int v = gray[cy * W + cx]; if (v < lo) lo = v; if (v > hi) hi = v; }
+        for (long cy = my0; cy < my1; cy++) { int v = gray[cy * W + cx]; if (v < lo) lo = v; if (v > hi) hi = v; }
         blank[cx - x0] = (hi - lo) < 24;
     }
     // 找内部的宽空白，得到若干段有字的区间
@@ -83,7 +85,7 @@ static NSArray<NSDictionary *> *splitAtBlankColumns(NSString *str, const uint8_t
         BOOL b = (i == n) || blank[i];
         if (!b) { if (segStart < 0) segStart = i; if (runStart >= 0) runStart = -1; continue; }
         if (runStart < 0) runStart = i;
-        BOOL wide = (i == n) || (i - runStart + 1 > bh * 2 && i + 1 < n && !blank[i + 1]);
+        BOOL wide = (i == n) || (i - runStart + 1 > bh && i + 1 < n && !blank[i + 1]);
         if (segStart >= 0 && wide) {
             [spans addObject:@[@(segStart), @(runStart)]];
             segStart = -1;
