@@ -320,22 +320,28 @@ function clusterRowsAndGetHeights(items) {
   return result;
 }
 
+/// 擦除用的底色：取框边上一圈像素里**出现最多**的颜色。
+/// 以前是框外 4 像素处 12 个点取平均——小按钮上的字，外面一圈有一半落在按钮外，
+/// 白底蓝底一平均就擦出一块淡蓝。字形很少碰到自己框的边，边上最多的颜色就是字底下的底色。
 function sampleEdgeColor(cleanCtx, x, y, w, h) {
-  const m = 4;
-  const points = [
-    [x - m, y], [x - m, y + h/2], [x - m, y + h],
-    [x + w + m, y], [x + w + m, y + h/2], [x + w + m, y + h],
-    [x, y - m], [x + w/2, y - m], [x + w, y - m],
-    [x, y + h + m], [x + w/2, y + h + m], [x + w, y + h + m],
-  ];
-  let sr = 0, sg = 0, sb = 0, n = 0;
-  for (const [px, py] of points) {
-    const cx = Math.max(0, Math.min(Math.round(px), canvas.width - 1));
-    const cy = Math.max(0, Math.min(Math.round(py), canvas.height - 1));
-    const p = cleanCtx.getImageData(cx, cy, 1, 1).data;
-    sr += p[0]; sg += p[1]; sb += p[2]; n++;
-  }
-  const r = Math.round(sr / n), g = Math.round(sg / n), b = Math.round(sb / n);
+  const x0 = Math.max(0, Math.round(x)), y0 = Math.max(0, Math.round(y));
+  const x1 = Math.min(canvas.width - 1, Math.round(x + w)), y1 = Math.min(canvas.height - 1, Math.round(y + h));
+  if (x1 <= x0 || y1 <= y0) return { r: 255, g: 255, b: 255, brightness: 255 };
+  const data = cleanCtx.getImageData(x0, y0, x1 - x0 + 1, y1 - y0 + 1).data;
+  const rowLen = x1 - x0 + 1;
+  const buckets = new Map();
+  const add = (px, py) => {
+    const i = ((py - y0) * rowLen + (px - x0)) * 4;
+    const key = (data[i] >> 4) << 8 | (data[i + 1] >> 4) << 4 | (data[i + 2] >> 4);
+    const e = buckets.get(key) || { n: 0, r: 0, g: 0, b: 0 };
+    e.n++; e.r += data[i]; e.g += data[i + 1]; e.b += data[i + 2];
+    buckets.set(key, e);
+  };
+  for (let px = x0; px <= x1; px++) { add(px, y0); add(px, y1); }
+  for (let py = y0 + 1; py < y1; py++) { add(x0, py); add(x1, py); }
+  let best = null;
+  for (const e of buckets.values()) if (!best || e.n > best.n) best = e;
+  const r = Math.round(best.r / best.n), g = Math.round(best.g / best.n), b = Math.round(best.b / best.n);
   const brightness = (r * 299 + g * 587 + b * 114) / 1000;
   return { r, g, b, brightness };
 }
