@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, app } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import { focusSticker, stickerAutoFocus, returnFocusIfIdle } from './overlay';
 
 const regionWindows = new Set<BrowserWindow>();
 
@@ -20,6 +21,7 @@ ipcMain.on('region-overlay-close', (event) => {
   if (win && !win.isDestroyed()) {
     regionWindows.delete(win);
     win.destroy();
+    returnFocusIfIdle();
   }
 });
 
@@ -109,7 +111,9 @@ export function showRegionOverlay(data: RegionOverlayData) {
       regionWidth: data.regionWidth,
       regionHeight: data.regionHeight,
     });
-    win.show();
+    // 自动选中：直接拿焦点；关掉时不抢焦点，点一下贴图才选中
+    if (stickerAutoFocus()) { win.show(); focusSticker(win); }
+    else win.showInactive();
     console.log('[region] Overlay shown');
   };
 

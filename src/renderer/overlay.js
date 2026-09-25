@@ -8,6 +8,29 @@ const ERASE_PAD = 2;
 /// 段落译文的行距：字号的多少倍
 const PARAGRAPH_LINE_GAP = 1.28;
 
+// ---------------------------------------------------------------------------
+// 选中提示：贴图拿到键盘焦点时（按键对它有效），沿边缘亮一圈细细的淡紫色边框；
+// 点到别的窗口就淡出。边框画在窗口里面（inset），透明窗口外面的阴影会被裁掉。
+// ---------------------------------------------------------------------------
+(function () {
+  const style = document.createElement('style');
+  style.textContent = `
+    #focusRing {
+      position: fixed; inset: 0; pointer-events: none; z-index: 10;
+      box-shadow: inset 0 0 0 1.5px rgba(203, 166, 247, 0.9), inset 0 0 8px rgba(203, 166, 247, 0.35);
+      opacity: 0; transition: opacity 0.12s ease;
+    }
+    #focusRing.on { opacity: 1; }`;
+  document.head.appendChild(style);
+  const ring = document.createElement('div');
+  ring.id = 'focusRing';
+  document.body.appendChild(ring);
+  const sync = () => ring.classList.toggle('on', document.hasFocus());
+  window.addEventListener('focus', sync);
+  window.addEventListener('blur', sync);
+  sync();
+})();
+
 /// 按住空格看原文用：干净的原图、画好译文的那一版
 let originalCanvas = null;
 let translatedCanvas = null;

@@ -1,5 +1,6 @@
 import { BrowserWindow, screen, ipcMain, app, clipboard, nativeImage } from 'electron';
 import { t } from './i18n';
+import { getConfig } from './config';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -27,12 +28,33 @@ export interface OverlayData {
 let dismissCallback: (() => void) | null = null;
 export function setDismissCallback(cb: () => void) { dismissCallback = cb; }
 
-// 点一下浮层就让它拿到键盘焦点。浮层是 showInactive() 弹出来的（不抢焦点，
-// 免得打断用户手上的事），代价是它一直不是 key window，⌘C 根本到不了它手里——
-// 所以点击时补一次 focus，这也正是 Snipaste 贴图的手感：点一下，然后就能复制。
+/// 让贴图拿到键盘焦点。TTY 没有 Dock 图标（辅助应用），光 win.focus() 不会让它变成
+/// 前台应用，按键还是进原来那个软件，所以要先把 TTY 整个拉到前台。
+export function focusSticker(win: BrowserWindow) {
+  if (win.isDestroyed()) return;
+  app.focus({ steal: true });
+  win.focus();
+}
+
+/// 贴图关掉后把焦点还给原来的软件：TTY 被拉到过前台，最后一个能拿焦点的窗口关了，
+/// macOS 不会自己切回去，接着打字就打空了。还有别的贴图、设置窗开着时不动。
+export function returnFocusIfIdle() {
+  setTimeout(() => {
+    const open = BrowserWindow.getAllWindows().some(w => !w.isDestroyed() && w.isVisible() && w.isFocusable());
+    if (!open && process.platform === 'darwin') app.hide();
+  }, 50);
+}
+
+/// 设置里「翻译后自动选中贴图」开着，就在贴图出来时直接选中它
+export function stickerAutoFocus(): boolean {
+  return getConfig().autoFocusSticker !== false;
+}
+
+// 点一下浮层就让它拿到键盘焦点（「翻译后自动选中贴图」关掉时就靠这个）。
+// 这也正是 Snipaste 贴图的手感：点一下，然后就能复制。
 ipcMain.on('sticker-focus', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  if (win && !win.isDestroyed()) win.focus();
+  if (win) focusSticker(win);
 });
 
 // 贴图复制：整张浮层（连同译文）进剪贴板，像 Snipaste 的贴图那样可以直接粘到别处。
@@ -222,7 +244,9 @@ export function showOverlay(data: OverlayData) {
     // 下一次全屏翻译就会盖不满，露出底下窗口的边。
     if (data.displayBounds) win.setBounds(data.displayBounds);
     win.webContents.send('show-translation', { ...data, screenshotDataUrl });
-    win.showInactive();
+    // 自动选中：直接拿焦点，边框亮起，不用先点一下；关掉时照旧不抢焦点
+    if (stickerAutoFocus()) { win.show(); focusSticker(win); }
+    else win.showInactive();
     hideLoading();
     console.log('[overlay] Shown');
   };
@@ -243,6 +267,7 @@ export function hideOverlay() {
     overlayWin.destroy();
     overlayWin = null;
     console.log('[overlay] Destroyed');
+    returnFocusIfIdle();
     // Pre-create a fresh window for next use
     setTimeout(() => ensureOverlayWindow(), 500);
   }

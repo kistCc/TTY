@@ -26,6 +26,9 @@ export interface Config {
   copyTextKey: string;
   /// 贴图上按住显示原文，松开回到译文。
   peekKey: string;
+  /// 翻译出来就让贴图拿到键盘焦点，不用先点一下就能按关闭、复制、看原文。
+  /// 代价是正在用的软件会失去焦点，所以可以关掉。
+  autoFocusSticker?: boolean;
   /// 首次启动弹过设置窗之后置为 true，之后启动只驻留菜单栏，不再弹窗。
   launchedBefore?: boolean;
   /// 登录时自动启动（静默，不显示任何窗口）。
@@ -57,6 +60,7 @@ const DEFAULT_CONFIG: Config = {
   copyImageKey: 'cmd+c',
   copyTextKey: 'shift+cmd+c',
   peekKey: 'space',
+  autoFocusSticker: true,
   openAtLogin: false,
   targetLanguage: 'zh-CN',
   provider: 'google',

@@ -17,6 +17,7 @@ const I18N = {
     hotkeyText: 'Selection', hotkeyClip: 'Clipboard',
     hotkeyCopyImage: 'Copy Sticker', hotkeyCopyText: 'Copy Text', hotkeyPeek: 'Hold for Original',
     startup: 'Startup', openAtLogin: 'Launch at login',
+    sticker: 'Sticker', autoFocusSticker: 'Select sticker after translating',
     record: 'Record', stop: 'Stop',
     targetLang: 'Target Language', provider: 'Provider',
     preset: 'Preset', model: 'Model',
@@ -36,6 +37,7 @@ const I18N = {
     hotkeyText: '划词翻译', hotkeyClip: '复制翻译',
     hotkeyCopyImage: '复制贴图', hotkeyCopyText: '复制译文', hotkeyPeek: '看原文（按住）',
     startup: '启动', openAtLogin: '开机自启',
+    sticker: '贴图', autoFocusSticker: '翻译后自动选中贴图',
     record: '录制', stop: '停止',
     targetLang: '目标语言', provider: '翻译服务',
     preset: '预设', model: '模型',
@@ -221,6 +223,7 @@ async function doSave() {
     copyTextKey: hotkeyValue('copyTextKey') || 'shift+cmd+c',
     peekKey: hotkeyValue('peekKey') || 'space',
     openAtLogin: document.getElementById('openAtLogin').checked,
+    autoFocusSticker: document.getElementById('autoFocusSticker').checked,
     targetLanguage: document.getElementById('targetLanguage').value,
     provider,
     providers: currentConfig?.providers || {},
@@ -327,6 +330,7 @@ window.api.getConfig().then(config => {
   setHotkeyField('copyTextKey', config.copyTextKey || 'shift+cmd+c');
   setHotkeyField('peekKey', config.peekKey || 'space');
   document.getElementById('openAtLogin').checked = !!config.openAtLogin;
+  document.getElementById('autoFocusSticker').checked = config.autoFocusSticker !== false;
   document.getElementById('targetLanguage').value = config.targetLanguage || 'zh-CN';
   providerSelect.value = config.provider || 'google';
   switchProvider(providerSelect.value);

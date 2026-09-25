@@ -2,6 +2,29 @@ import { BrowserWindow, screen, ipcMain, app } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { takeScreenshot } from './screenshot';
+import { execFile, execFileSync } from 'child_process';
+
+/// 框选前在前台的应用（bundle id）。框选窗口会把 TTY 拉到前台，框完关掉后
+/// macOS 不会自己切回去，接着打字就打空了——框完要把前台还给它。
+/// 用 lsappinfo 查、用 open -b 切回去，都不需要额外的系统权限。
+let previousApp = '';
+
+function rememberFrontApp() {
+  previousApp = '';
+  try {
+    const asn = execFileSync('lsappinfo', ['front'], { timeout: 1000 }).toString().trim();
+    const info = execFileSync('lsappinfo', ['info', '-only', 'bundleid', asn], { timeout: 1000 }).toString();
+    // 输出形如 bundleID="com.apple.TextEdit"（不同系统版本也见过 "CFBundleIdentifier"="…"）
+    const m = info.match(/(?:bundleID|"CFBundleIdentifier")\s*=\s*"([^"]+)"/);
+    if (m && m[1] !== 'com.screen-translator.app') previousApp = m[1];
+  } catch {}
+}
+
+function restoreFrontApp() {
+  const id = previousApp;
+  previousApp = '';
+  if (id) execFile('open', ['-b', id], () => {});
+}
 
 let selectionWin: BrowserWindow | null = null;
 // resolve function is set BEFORE any await, so cancelSelection can always resolve the promise
@@ -29,6 +52,7 @@ export function showSelection(): Promise<SelectionRect | null> {
   return new Promise((resolve) => {
     // Set resolve IMMEDIATELY — before any async work — so cancelSelection always works
     pendingResolve = resolve;
+    rememberFrontApp();
 
     doSelection(resolve).catch((err) => {
       console.error('[selection] Error:', err);
@@ -87,6 +111,7 @@ async function doSelection(resolve: (value: SelectionRect | null) => void) {
     cleanupListeners();
     if (selectionWin && !selectionWin.isDestroyed()) { selectionWin.destroy(); }
     selectionWin = null;
+    restoreFrontApp();
     pendingResolve = null;
     resolve({
       x: display.bounds.x + rect.x,
@@ -102,6 +127,7 @@ async function doSelection(resolve: (value: SelectionRect | null) => void) {
     cleanupListeners();
     if (selectionWin && !selectionWin.isDestroyed()) { selectionWin.destroy(); }
     selectionWin = null;
+    restoreFrontApp();
     pendingResolve = null;
     try { fs.unlinkSync(screenshotPath); } catch {}
     resolve(null);
@@ -127,6 +153,7 @@ async function doSelection(resolve: (value: SelectionRect | null) => void) {
 function cleanupAll() {
   if (selectionWin && !selectionWin.isDestroyed()) {
     selectionWin.destroy();
+    restoreFrontApp();
   }
   selectionWin = null;
   pendingResolve = null;
