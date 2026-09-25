@@ -9,18 +9,22 @@ const ERASE_PAD = 2;
 const PARAGRAPH_LINE_GAP = 1.28;
 
 // ---------------------------------------------------------------------------
-// 选中提示：贴图拿到键盘焦点时（按键对它有效），沿边缘亮一圈细细的淡紫色边框；
-// 点到别的窗口就淡出。边框画在窗口里面（inset），透明窗口外面的阴影会被裁掉。
+// 边框：贴图就是屏幕截图，不加边和底下的画面长得一模一样，分不出来。
+// 没选中时是一圈灰色细线（一深一浅两层，白底黑底都看得见）；
+// 拿到键盘焦点（按键对它有效）时换成淡紫色，带一点柔光。
+// 边框画在窗口里面（inset），透明窗口外面画的东西会被裁掉。
 // ---------------------------------------------------------------------------
 (function () {
   const style = document.createElement('style');
   style.textContent = `
     #focusRing {
       position: fixed; inset: 0; pointer-events: none; z-index: 10;
-      box-shadow: inset 0 0 0 1.5px rgba(203, 166, 247, 0.9), inset 0 0 8px rgba(203, 166, 247, 0.35);
-      opacity: 0; transition: opacity 0.12s ease;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.28), inset 0 0 0 2px rgba(255, 255, 255, 0.35);
+      transition: box-shadow 0.12s ease;
     }
-    #focusRing.on { opacity: 1; }`;
+    #focusRing.on {
+      box-shadow: inset 0 0 0 1.5px rgba(203, 166, 247, 0.9), inset 0 0 8px rgba(203, 166, 247, 0.35);
+    }`;
   document.head.appendChild(style);
   const ring = document.createElement('div');
   ring.id = 'focusRing';
@@ -181,6 +185,8 @@ window.api.onShowTranslation((data) => {
     translatedCanvas.width = canvas.width;
     translatedCanvas.height = canvas.height;
     translatedCanvas.getContext('2d').drawImage(canvas, 0, 0);
+    // 区域贴图等画好了才显示（全屏浮层没有这个接口）
+    if (window.api.drawn) window.api.drawn();
   };
 
   img.src = data.screenshotDataUrl || `file://${screenshotPath}`;

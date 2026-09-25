@@ -74,10 +74,13 @@ export function showRegionOverlay(data: RegionOverlayData) {
     minWidth: 80,
     minHeight: 60,
     frame: false,
-    transparent: true,
+    // 不透明：macOS 只给不透明窗口画系统阴影。贴图整个被截图盖满，本来也用不着透明
+    transparent: false,
+    backgroundColor: '#1e1e1e',
     alwaysOnTop: true,
     skipTaskbar: true,
-    hasShadow: false,
+    // 系统窗口阴影：贴图像一张浮在屏幕上的纸，没选中也能看出它在哪（Snipaste 也是这样）
+    hasShadow: true,
     resizable: true,
     movable: true,
     focusable: true,
@@ -103,6 +106,22 @@ export function showRegionOverlay(data: RegionOverlayData) {
     console.error('[region] Failed to read screenshot:', err);
   }
 
+  // 等贴图画好再显示，免得先闪一下底色；万一渲染层没回话，800ms 后照样显示
+  let shown = false;
+  const reveal = () => {
+    if (shown || win.isDestroyed()) return;
+    shown = true;
+    // 自动选中：直接拿焦点；关掉时不抢焦点，点一下贴图才选中
+    if (stickerAutoFocus()) { win.show(); focusSticker(win); }
+    else win.showInactive();
+    console.log('[region] Overlay shown');
+  };
+  const onDrawn = (event: Electron.IpcMainEvent) => {
+    if (event.sender === win.webContents) { ipcMain.removeListener('sticker-drawn', onDrawn); reveal(); }
+  };
+  ipcMain.on('sticker-drawn', onDrawn);
+  win.on('closed', () => ipcMain.removeListener('sticker-drawn', onDrawn));
+
   const send = () => {
     win.webContents.send('show-translation', {
       blocks: data.blocks,
@@ -111,10 +130,7 @@ export function showRegionOverlay(data: RegionOverlayData) {
       regionWidth: data.regionWidth,
       regionHeight: data.regionHeight,
     });
-    // 自动选中：直接拿焦点；关掉时不抢焦点，点一下贴图才选中
-    if (stickerAutoFocus()) { win.show(); focusSticker(win); }
-    else win.showInactive();
-    console.log('[region] Overlay shown');
+    setTimeout(reveal, 800);
   };
 
   if (win.webContents.isLoading()) {

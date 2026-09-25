@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('api', {
   resizeBy: (delta: number) => {
     ipcRenderer.send('region-overlay-resize-by', { delta });
   },
+  drawn: () => {
+    ipcRenderer.send('sticker-drawn');
+  },
   focusWindow: () => {
     ipcRenderer.send('sticker-focus');
   },
