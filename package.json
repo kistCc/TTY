@@ -26,6 +26,7 @@
   "build": {
     "appId": "com.screen-translator.app",
     "productName": "TTY",
+    "afterPack": "scripts/after-pack.js",
     "mac": {
       "icon": "resources/icon.icns",
       "category": "public.app-category.utilities",

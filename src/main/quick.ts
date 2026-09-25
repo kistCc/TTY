@@ -1,4 +1,4 @@
-import { BrowserWindow, screen, clipboard, ipcMain, app, shell } from 'electron';
+import { BrowserWindow, screen, clipboard, ipcMain, app, shell, systemPreferences } from 'electron';
 import * as path from 'path';
 import { getConfig } from './config';
 import { translate } from './translator';
@@ -111,6 +111,8 @@ export function pickTargetLang(text: string, configured: string): string {
   return configured;
 }
 
+let axPrompted = false;
+
 /// 划词翻译：只认此刻选中的文本，取不到就直说，不会偷偷改用剪贴板。
 export async function showSelectionTranslate() {
   // 必须赶在窗口显示之前问——窗口一显示就抢走了焦点，选区也就无从查起。
@@ -122,6 +124,12 @@ export async function showSelectionTranslate() {
     denied = sel.denied;
   } catch {}
   console.log(`[quick] 划词：${text.length} 字${denied ? '（没权限）' : ''}`);
+  // 没权限：顺手调一次系统的授权弹窗，它会把 TTY 加进「辅助功能」列表，用户只要打开开关。
+  // 每次启动只弹一次，免得每按一次 ⌥D 都被打断。
+  if (denied && !axPrompted) {
+    axPrompted = true;
+    try { systemPreferences.isTrustedAccessibilityClient(true); } catch {}
+  }
 
   // 只有两条路都因为没权限而失败时才提示；真的没选中就老实说没选中
   runQuick(text, 'selection', { needsAX: denied });

@@ -1,7 +1,7 @@
 import { execFile } from 'child_process';
-import { clipboard, nativeImage } from 'electron';
+import { clipboard, nativeImage, systemPreferences } from 'electron';
 import * as fs from 'fs';
-import { nativePaths } from './native';
+import { nativePaths, debugLog } from './native';
 
 // 取当前选中的文本（划词翻译用）。
 //
@@ -44,12 +44,24 @@ interface PasteboardBackup {
 
 export async function getSelection(): Promise<SelectionResult> {
   const ax = await tryAccessibility();
+  const trusted = isTrusted();
+  debugLog(`划词：AX 取到 ${ax.text.length} 字，${ax.denied ? '没权限' : '有权限'}；主进程辅助功能 ${trusted ? '已授权' : '未授权'}`);
   if (ax.text) return { text: ax.text, denied: false };
 
   // AX 明确报了没权限才动剪贴板；它只是没读到选区的话，说明用户确实没选中
   if (!ax.denied) return { text: '', denied: false };
 
-  return tryCopy();
+  const got = await tryCopy();
+  // 两条路都要辅助功能权限（拷贝那条靠 System Events 操作别的应用）。
+  // TTY 本身没被授权时，取不到就一定是权限问题——别再说成"没有选中文本"。
+  // 这一条不依赖报错文字：报错跟着系统语言变，只认英文会漏掉中文系统。
+  if (!got.text && !trusted) return { text: '', denied: true };
+  return got;
+}
+
+/// 主进程（TTY 本身）有没有辅助功能权限。子进程和 osascript 都算在 TTY 头上，看它就行。
+function isTrusted(): boolean {
+  try { return systemPreferences.isTrustedAccessibilityClient(false); } catch { return true; }
 }
 
 function tryAccessibility(): Promise<{ text: string; denied: boolean }> {
@@ -62,6 +74,7 @@ function tryAccessibility(): Promise<{ text: string; denied: boolean }> {
       { maxBuffer: 1024 * 1024, timeout: AX_TIMEOUT_MS },
       (error, stdout, stderr) => {
         const text = (stdout || '').trim();
+        debugLog(`划词：axtext 退出 ${error ? (error as any).code ?? 'err' : 0}，stderr: ${(stderr || '').trim().replace(/\n/g, ' | ').slice(0, 200)}`);
         if (text) { resolve({ text, denied: false }); return; }
         // 子进程自己报的信任状态最准，主进程的 isTrustedAccessibilityClient 管不到它
         const denied = /trusted=0/.test(stderr || '') || !!(error && (error as any).killed);
@@ -77,6 +90,7 @@ async function tryCopy(): Promise<SelectionResult> {
 
   // 先走菜单项
   const menu = await runOsascript(SCRIPT_MENU_COPY);
+  debugLog(`划词：菜单拷贝 ok=${menu.ok} 输出=${menu.output} 权限问题=${menu.permissionIssue}`);
   if (menu.output === 'disabled') {
     // 拷贝菜单项是灰的——这个应用明确告诉我们当前没有可拷贝的选区
     console.log('[selection] 拷贝菜单项是灰的，确实没有选中文本');
@@ -224,9 +238,11 @@ function runOsascript(script: string): Promise<{ ok: boolean; output: string; pe
     execFile('osascript', ['-e', script], { timeout: OSASCRIPT_TIMEOUT_MS }, (error, stdout, stderr) => {
       if (error) {
         const msg = (stderr || (error as any).message || '').toString();
-        // -1743 = 没有「自动化」权限；-25211 = 辅助功能被关
-        const permissionIssue = /-1743|-25211|not allowed|assistive/i.test(msg);
+        // -1743 = 没有「自动化」权限；-25211 / -1719 = 辅助功能没开；1002 = 不允许发送按键。
+        // 错误描述跟着系统语言走（中文是「不允许辅助访问」），所以主要认错误码
+        const permissionIssue = /\((-1743|-25211|-1719|1002)\)|not allowed|assistive|不允许/i.test(msg);
         console.log('[selection] osascript 失败:', msg.trim().slice(0, 160));
+        debugLog(`划词：osascript 失败 ${msg.trim().slice(0, 200)}`);
         resolve({ ok: false, output: '', permissionIssue });
         return;
       }

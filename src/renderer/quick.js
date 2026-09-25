@@ -14,14 +14,16 @@ const I18N = {
     emptySelection: '没有选中文本',
     tip: '关闭', failed: '翻译失败：',
     fromSelection: '划词',
-    axHint: '划词取词被系统挡住了，需要在「隐私与安全性」里给 TTY 授权', axOpen: '去开启',
+    noAccess: '取不到选中的文本',
+    axHint: '划词要「辅助功能」权限：在「隐私与安全性 → 辅助功能」里打开 TTY。开关已经开着还不行，就把 TTY 删掉（−）再重新添加（+）', axOpen: '去开启',
   },
   en: {
     translating: 'Translating', copy: 'Copy', copied: 'Copied',
     emptySelection: 'Nothing selected',
     tip: 'to close', failed: 'Failed: ',
     fromSelection: 'selection',
-    axHint: 'Selection capture is blocked — grant TTY permission in Privacy & Security', axOpen: 'Open Settings',
+    noAccess: "Couldn't read the selection",
+    axHint: 'Needs Accessibility permission: turn on TTY in Privacy & Security → Accessibility. Already on but still failing? Remove TTY (−) and add it again (+)', axOpen: 'Open Settings',
   },
 };
 
@@ -66,7 +68,8 @@ window.quick.onShow((data) => {
     routeEl.textContent = s('fromSelection');
     sourceEl.style.display = 'none';
     resultEl.className = 'pending';
-    resultEl.textContent = s('emptySelection');
+    // 没权限时不知道用户有没有选中，别说成"没有选中文本"
+    resultEl.textContent = s(data.needsAX ? 'noAccess' : 'emptySelection');
     setCopyState(false, 'copy');
     syncHeight();
     return;
