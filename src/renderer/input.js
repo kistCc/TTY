@@ -4,17 +4,20 @@ const textEl = document.getElementById('text');
 const resultEl = document.getElementById('result');
 const copyBtn = document.getElementById('copy');
 const tipEl = document.getElementById('tip');
+const targetEl = document.getElementById('target');
 
 const I18N = {
   zh: {
     title: '输入翻译', auto: '自动识别', placeholder: '输入要翻译的文字…',
     keysHint: '回车翻译 · ⇧回车换行', autoHint: '中↔英 自动',
+    pick: '翻成', autoOption: '自动（中↔英）', autoShort: '自动',
     translating: '翻译中', copy: '复制译文', copied: '已复制',
     close: '关闭', copyTip: '复制', failed: '翻译失败：',
   },
   en: {
     title: 'Type to Translate', auto: 'Auto', placeholder: 'Type text to translate…',
     keysHint: 'Return to translate · ⇧Return for new line', autoHint: 'auto direction',
+    pick: 'To', autoOption: 'Auto (zh ↔ en)', autoShort: 'Auto',
     translating: 'Translating', copy: 'Copy', copied: 'Copied',
     close: 'close', copyTip: 'copy', failed: 'Failed: ',
   },
@@ -25,9 +28,14 @@ const LANG_NAME = {
   ko: '한국어', fr: 'Français', de: 'Deutsch', es: 'Español',
 };
 
+/// 下拉里的语言，顺序和设置里「目标语言」一致
+const TARGETS = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'fr', 'de', 'es'];
+
 let lang = 'zh';
 let currentId = 0;
 let currentTranslation = '';
+/// 翻成哪种语言：'auto' 或语言代码（主进程记在配置里，下次打开还是它）
+let chosen = 'auto';
 
 function s(key) { return I18N[lang][key]; }
 function langName(code) { return code === 'auto' ? s('auto') : (LANG_NAME[code] || code || ''); }
@@ -50,6 +58,27 @@ function updateTip() {
   tipEl.textContent = currentTranslation ? `${window.ttyKeys.pretty(keys.copyTextKey)} ${s('copyTip')} · ${close}` : close;
 }
 
+/// 下拉的选项（界面语言可能变，每次打开都重建）
+function buildTargets() {
+  targetEl.innerHTML = '';
+  for (const code of ['auto', ...TARGETS]) {
+    const opt = document.createElement('option');
+    opt.value = code;
+    opt.textContent = code === 'auto' ? s('autoOption') : LANG_NAME[code];
+    targetEl.appendChild(opt);
+  }
+  targetEl.value = chosen;
+}
+
+/// 右下角：自动时写「中↔英 自动」，选了语言写「→ 日本語」
+function updateAutoHint() {
+  document.getElementById('hintAuto').textContent = chosen === 'auto' ? s('autoHint') : `→ ${LANG_NAME[chosen]}`;
+}
+
+function requestTranslate() {
+  if (textEl.value.trim()) window.input.translate(textEl.value, chosen);
+}
+
 function setCopyState(enabled, labelKey) {
   copyBtn.disabled = !enabled;
   copyBtn.textContent = s(labelKey);
@@ -64,13 +93,16 @@ function copyTranslation() {
 
 window.input.onShow((data) => {
   lang = data.lang === 'en' ? 'en' : 'zh';
+  chosen = data.chosen || 'auto';
   currentId = 0;
   currentTranslation = '';
-  routeEl.textContent = `${s('title')} · ${s('auto')}`;
+  document.getElementById('pickLabel').textContent = s('pick');
+  buildTargets();
+  routeEl.textContent = s('title');
   textEl.placeholder = s('placeholder');
   textEl.value = '';
   document.getElementById('hintKeys').textContent = s('keysHint');
-  document.getElementById('hintAuto').textContent = s('autoHint');
+  updateAutoHint();
   resultEl.className = '';
   resultEl.textContent = '';
   setCopyState(false, 'copy');
@@ -115,7 +147,16 @@ textEl.addEventListener('keydown', (e) => {
   if (e.isComposing || e.keyCode === 229) return;
   if (e.shiftKey) return; // ⇧回车换行，交给输入框自己处理
   e.preventDefault();
-  if (textEl.value.trim()) window.input.translate(textEl.value);
+  requestTranslate();
+});
+
+// 换了语言：记住，输入框里有字就马上按新语言重翻；焦点回到输入框接着打字
+targetEl.addEventListener('change', () => {
+  chosen = targetEl.value;
+  window.input.setTarget(chosen);
+  updateAutoHint();
+  requestTranslate();
+  textEl.focus();
 });
 
 copyBtn.addEventListener('click', copyTranslation);

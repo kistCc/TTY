@@ -20,6 +20,9 @@ export interface Config {
   textKey: string;
   /// 输入翻译：弹出输入框，打字、回车翻译。
   inputKey: string;
+  /// 输入翻译翻成哪种语言：'auto' 是中↔英自动（中文翻英文，外文翻目标语言），
+  /// 其它是固定的语言代码。在输入框顶上的下拉里选，选过就记住。
+  inputTargetLang?: string;
   /// 贴图上复制整张贴图（贴图要先点一下拿到焦点）。
   copyImageKey: string;
   /// 贴图上复制译文；划词/复制翻译的小窗里也是这个键。

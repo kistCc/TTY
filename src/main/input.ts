@@ -1,6 +1,6 @@
 import { BrowserWindow, screen, clipboard, ipcMain, app } from 'electron';
 import * as path from 'path';
-import { getConfig } from './config';
+import { getConfig, saveConfig } from './config';
 import { translate } from './translator';
 import { pickTargetLang } from './quick';
 import { isChineseUI, readableError } from './i18n';
@@ -38,16 +38,27 @@ ipcMain.on('input-height', (_e, height: number) => {
   inputWin.setBounds({ x: b.x, y: Math.round(y), width: b.width, height: h });
 });
 
-ipcMain.on('input-translate', async (_e, raw: string) => {
+/// 下拉里能选的语言，和设置里「目标语言」的列表一致
+const TARGETS = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'fr', 'de', 'es'];
+
+/// 顶上下拉选了哪种语言：记进配置，下次打开还是它
+ipcMain.on('input-set-target', (_e, target: string) => {
+  const value = target === 'auto' || TARGETS.includes(target) ? target : 'auto';
+  saveConfig({ inputTargetLang: value });
+});
+
+ipcMain.on('input-translate', async (_e, payload: { text: string; target?: string }) => {
   const win = inputWin;
   if (!win || win.isDestroyed()) return;
-  const text = String(raw || '').trim();
+  const text = String(payload?.text || '').trim();
   if (!text) return;
 
   const config = getConfig();
   const body = text.length > MAX_TEXT_LENGTH ? text.slice(0, MAX_TEXT_LENGTH) : text;
   const configured = config.targetLanguage || 'zh-CN';
-  const targetLang = pickTargetLang(body, configured);
+  const chosen = payload?.target && TARGETS.includes(payload.target) ? payload.target : 'auto';
+  // 自动：中文翻英文，外文翻设置的目标语言；选了语言就固定翻成它
+  const targetLang = chosen === 'auto' ? pickTargetLang(body, configured) : chosen;
   const id = ++requestSeq;
   send(win, 'input-pending', { id, source: sourceLabel(body, configured, targetLang), targetLang });
 
@@ -62,13 +73,15 @@ ipcMain.on('input-translate', async (_e, raw: string) => {
   }
 });
 
-/// 顶上显示的"从什么语言"：反过来译时就是设置里的目标语言；
-/// 大部分是英文字母时写 English；其它说不准的写"自动识别"
-function sourceLabel(text: string, configured: string, target: string): string {
-  if (target !== configured) return configured;
+/// 顶上显示的"从什么语言"：大部分是汉字写简体中文，大部分是英文字母写 English，
+/// 其它说不准的写"自动识别"（原文是什么语言由翻译服务自己判断）
+function sourceLabel(text: string, _configured: string, _target: string): string {
   const letters = text.replace(/\s/g, '');
+  if (!letters) return 'auto';
+  const han = (letters.match(/[\u4e00-\u9fff]/g) || []).length;
   const latin = (letters.match(/[A-Za-z]/g) || []).length;
-  return letters && latin / letters.length > 0.6 ? 'en' : 'auto';
+  if (han / letters.length > 0.4) return 'zh-CN';
+  return latin / letters.length > 0.6 ? 'en' : 'auto';
 }
 
 function ensureInputWindow(): BrowserWindow {
@@ -120,7 +133,8 @@ export function showInputTranslate() {
   rememberFrontApp();
   const win = ensureInputWindow();
   requestSeq++;
-  send(win, 'input-show', { lang: isChineseUI() ? 'zh' : 'en', target: getConfig().targetLanguage || 'zh-CN' });
+  const saved = getConfig().inputTargetLang;
+  send(win, 'input-show', { lang: isChineseUI() ? 'zh' : 'en', chosen: saved && TARGETS.includes(saved) ? saved : 'auto' });
   positionNearCursor(win, MIN_HEIGHT);
   win.show();
   // 要打字，所以一定要拿到键盘焦点
