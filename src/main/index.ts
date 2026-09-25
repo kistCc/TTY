@@ -493,6 +493,7 @@ function withTranslation(block: ParagraphBlock, result: { text: string; spans: a
   const out: any = { ...block, translated: result?.text || '', spans: inkOn ? result?.spans || [] : [] };
   if (!inkOn) { delete out.ink; delete out.runs; delete out.underline; }
   delete out.eraseBottom;
+  delete out.segs;
   return out;
 }
 

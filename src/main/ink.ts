@@ -23,13 +23,22 @@ export interface InkInfo {
   underline?: boolean;
   /// 和主色不同的色段，按原文顺序
   runs?: InkRun[];
+  /// 所有同色的片段（含主色的），按原文顺序。并段时要用：一行里彩色字比白字多时，
+  /// 这一行自己的主色是彩色，并进白字的段落后，白字的那几截得重新变成"不同于主色"的色段
+  segs?: InkRun[];
 }
 
 /// 译文里一段要上色的范围 [start, end)
 export interface InkSpan { start: number; end: number; ink: RGB; underline?: boolean }
 
 /// 量色太少的词不可信：一两个像素宽的标点、细小的符号，抗锯齿后颜色偏得厉害
-const MIN_PIXELS = 6;
+const MIN_PIXELS = 20;
+
+/// 单个拉丁字母、数字、符号（"I"、"a"、"-"）笔画太细，量出来的颜色常常偏，不拿来定色
+function tooThin(text: string, t: InkToken): boolean {
+  const w = text.slice(t.s, t.e);
+  return w.length === 1 && !/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(w);
+}
 
 function norm(v: number[]): number {
   return Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
@@ -64,7 +73,7 @@ export function sameInk(a: RGB, b: RGB, _bg?: RGB): boolean {
 /// 按词把原生程序的量色结果整理成 InkInfo：
 /// 颜色相近的词归成一组，字数最多的那组是主色；其余的词连成色段。
 export function summarizeTokens(text: string, tokens: InkToken[] | undefined, bg: RGB | undefined): InkInfo {
-  const measured = (tokens || []).filter(t => t.n >= MIN_PIXELS && t.e > t.s);
+  const measured = (tokens || []).filter(t => t.n >= MIN_PIXELS && t.e > t.s && !tooThin(text, t));
   if (!measured.length) return {};
 
   // 颜色分组：每个词找一个颜色相同的组加进去，没有就另开一组
@@ -84,9 +93,10 @@ export function summarizeTokens(text: string, tokens: InkToken[] | undefined, bg
   const underlinedChars = main.members.filter(t => t.u).reduce((s, t) => s + (t.e - t.s), 0);
   const info: InkInfo = { ink: main.ink, bg, underline: mainChars > 0 && underlinedChars / mainChars >= 0.8 };
 
-  // 色段：按原文顺序，把相邻的、同一组的非主色词连起来（中间的空格、连字符一起带上）
+  // 按原文顺序，把相邻的、同一组的词连成片段（中间的空格、连字符一起带上）。
+  // 非主色的片段就是色段
   const ordered = [...measured].sort((a, b) => a.s - b.s);
-  const runs: InkRun[] = [];
+  const segs: InkRun[] = [];
   let cur: { s: number; e: number; group: typeof main; under: boolean } | null = null;
   const flush = () => {
     if (!cur) return;
@@ -97,45 +107,44 @@ export function summarizeTokens(text: string, tokens: InkToken[] | undefined, bg
     const runText = text.slice(s, cur.e).trim()
       .replace(/^[("'“‘\[（「『]+/, '')
       .replace(/[.,;:!?)"'”’\]，。、；：！？）」』]+$/, '');
-    if (runText) runs.push({ text: runText, ink: cur.group.ink, underline: cur.under || undefined });
+    if (runText) segs.push({ text: runText, ink: cur.group.ink, underline: cur.under || undefined });
     cur = null;
   };
   for (const t of ordered) {
     const g = groups.find(g => g.members.includes(t))!;
-    if (g === main) { flush(); continue; }
     if (cur && cur.group === g) { cur.e = t.e; cur.under = cur.under && !!t.u; continue; }
     flush();
     cur = { s: t.s, e: t.e, group: g, under: !!t.u };
   }
   flush();
+  info.segs = segs;
+  const runs = segs.filter(r => r.ink !== main.ink);
   if (runs.length) info.runs = runs;
   return info;
 }
 
 /// 几块拼成一行、几行拼成一段时，颜色信息怎么合：
-/// 字数最多的那种颜色是整段的主色；主色和整段不一样的块，整块变成一个色段；
-/// 块自己的色段照搬（和整段主色相同的除外）。
+/// 把每块的同色片段摊开，字数最多的那种颜色是整段的主色，其余颜色的片段都是色段。
+/// 不能按"每块的主色"合：一行里彩色路径比白字长时，这一行的主色是彩色，
+/// 整行当一个色段并进白字段落，行里的白字也会被画成彩色。
 export function mergeInk(parts: ({ text: string } & InkInfo)[]): InkInfo {
-  const withInk = parts.filter(p => p.ink);
-  if (!withInk.length) return {};
-  const bg = withInk[0].bg;
-  const groups: { ink: RGB; chars: number; underline: boolean }[] = [];
-  for (const p of withInk) {
-    let g = groups.find(g => sameInk(g.ink, p.ink!, bg));
-    if (!g) { g = { ink: p.ink!, chars: 0, underline: true }; groups.push(g); }
-    g.chars += p.text.length;
-    g.underline = g.underline && !!p.underline;
+  const segs: InkRun[] = [];
+  for (const p of parts) {
+    if (p.segs?.length) segs.push(...p.segs);
+    else if (p.ink) segs.push({ text: p.text.trim(), ink: p.ink, underline: p.underline });
+  }
+  if (!segs.length) return {};
+  const bg = parts.find(p => p.bg)?.bg;
+  const groups: { ink: RGB; chars: number; underChars: number }[] = [];
+  for (const r of segs) {
+    let g = groups.find(g => sameInk(g.ink, r.ink, bg));
+    if (!g) { g = { ink: r.ink, chars: 0, underChars: 0 }; groups.push(g); }
+    g.chars += r.text.length;
+    if (r.underline) g.underChars += r.text.length;
   }
   const main = groups.reduce((a, b) => (b.chars > a.chars ? b : a));
-  const runs: InkRun[] = [];
-  for (const p of parts) {
-    if (p.ink && !sameInk(p.ink, main.ink, bg)) {
-      runs.push({ text: p.text.trim(), ink: p.ink, underline: p.underline || undefined });
-      continue;
-    }
-    for (const r of p.runs || []) if (!sameInk(r.ink, main.ink, bg)) runs.push(r);
-  }
-  const info: InkInfo = { ink: main.ink, bg, underline: main.underline && withInk.length === parts.length };
+  const info: InkInfo = { ink: main.ink, bg, underline: main.chars > 0 && main.underChars / main.chars >= 0.8, segs };
+  const runs = segs.filter(r => !sameInk(r.ink, main.ink, bg));
   if (runs.length) info.runs = runs;
   return info;
 }

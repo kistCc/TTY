@@ -35,9 +35,41 @@ const BRAND_PATTERNS = [
   /\bGitHub\b/g, /\bmacOS\b/g, /\biOS\b/g, /\bTTY\b/g, /\bCowork\b/g,
 ];
 
-function maskBrands(text: string): { text: string; brands: string[] } {
+/// 目标语言用的文字：外文句子里夹着这种字时要遮起来（见 maskTargetScript）
+const TARGET_SCRIPT: Record<string, RegExp> = {
+  zh: /[\u3400-\u4dbf\u4e00-\u9fff]/g,
+  ja: /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/g,
+  ko: /[\uac00-\ud7af]/g,
+};
+
+/// Google 按"整句是什么语言"决定翻不翻：英文句子里夹着中文（文件路径、中文名词），
+/// 它会把整句判成中文，目标又是中文，就原样返回。实测直接指定"源语言=英文"能翻出来，
+/// 但会顺手把夹着的中文也改掉（"改动记录"变"记录记录"、"历史"变"history"）。
+/// 所以主体是外文的段落里，把带目标文字的词整个换成占位符：Google 看到的是纯外文，
+/// 语言判得对，翻完再原样换回去，中文一个字都不动。
+/// 按空格切出"词"，整个词一起遮（"历史/TTY-1.4.0_快捷键修改前.dmg" 只遮汉字会被拆乱）；
+/// 词两头的标点、颜色标签留在外面。
+function maskTargetScript(text: string, targetLang: string, held: string[]): string {
+  const script = TARGET_SCRIPT[targetLang.split('-')[0]];
+  if (!script) return text;
+  const plain = text.replace(/<\/?c\d+>/g, ' ');
+  const own = (plain.match(script) || []).length;
+  const latin = (plain.match(/[A-Za-z]/g) || []).length;
+  if (!own || latin <= own) return text;
+  const single = new RegExp(script.source);
+  return text.replace(/[^\s<>]+/g, (word) => {
+    if (!single.test(word)) return word;
+    const m = word.match(/^([("'“‘\[（「『]*)(.*?)([.,;:!?)"'”’\]，。、；：！？）」』]*)$/)!;
+    if (!m[2]) return word;
+    held.push(m[2]);
+    return `${m[1]}XQZ${held.length - 1}${m[3]}`;
+  });
+}
+
+function maskBrands(text: string, targetLang: string, provider: string): { text: string; brands: string[] } {
   const brands: string[] = [];
-  let masked = text;
+  // 先遮夹着的中文，再遮产品名：产品名的正则不会碰到占位符，换回来一遍就够
+  let masked = provider === 'google' ? maskTargetScript(text, targetLang, brands) : text;
   for (const re of BRAND_PATTERNS) {
     masked = masked.replace(re, (hit) => {
       brands.push(hit);
@@ -74,7 +106,7 @@ export async function translate(
   const needTranslate = unique.filter(text => !keepAsIs(text));
   // 句子里夹着的产品名（"the summer Claude Code promo…"）换成占位符再发，
   // 翻译服务照抄不动，回来按原样还回去，就不会有"克劳德代码"了。
-  const masked = needTranslate.map(maskBrands);
+  const masked = needTranslate.map(t => maskBrands(t, targetLang, config.provider));
   const translatedList = needTranslate.length
     ? await translateUnique(masked.map(m => m.text), targetLang, config)
     : [];
