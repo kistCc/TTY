@@ -54,6 +54,14 @@ document.addEventListener('mouseup', (e) => {
   window.api.confirmSelection({ x, y, width: w, height: h });
 });
 
+// 提示条上写的是设置里的关闭键（框选窗口每次都新建，设置改了下次就是新的）
+const cancelKey = window.ttyKeys.pretty(window.ttyKeys.get().dismissKey);
+if (cancelKey) hint.textContent = `拖拽框选翻译区域 · ${cancelKey} 取消`;
+
+// 取消框选：设置里的关闭键
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') window.api.cancelSelection();
+  if (window.ttyKeys.match(e, window.ttyKeys.get().dismissKey)) {
+    e.preventDefault();
+    window.api.cancelSelection();
+  }
 });

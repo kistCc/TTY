@@ -12,14 +12,14 @@ const I18N = {
   zh: {
     translating: '翻译中', copy: '复制译文', copied: '已复制',
     emptySelection: '没有选中文本', emptyClipboard: '剪贴板是空的',
-    tip: '⎋ 关闭', failed: '翻译失败：',
+    tip: '关闭', failed: '翻译失败：',
     fromClipboard: '剪贴板', fromSelection: '划词',
     axHint: '划词取词被系统挡住了，需要在「隐私与安全性」里给 TTY 授权', axOpen: '去开启',
   },
   en: {
     translating: 'Translating', copy: 'Copy', copied: 'Copied',
     emptySelection: 'Nothing selected', emptyClipboard: 'Clipboard is empty',
-    tip: '⎋ to close', failed: 'Failed: ',
+    tip: 'to close', failed: 'Failed: ',
     fromClipboard: 'clipboard', fromSelection: 'selection',
     axHint: 'Selection capture is blocked — grant TTY permission in Privacy & Security', axOpen: 'Open Settings',
   },
@@ -53,7 +53,8 @@ window.quick.onShow((data) => {
   currentId = data.id;
   currentTranslation = '';
   lang = data.lang === 'en' ? 'en' : 'zh';
-  tipEl.textContent = s('tip');
+  // 提示里写的是设置里的关闭键
+  tipEl.textContent = `${window.ttyKeys.pretty(window.ttyKeys.get().dismissKey)} ${s('tip')}`;
 
   axhintEl.classList.toggle('show', !!data.needsAX);
   if (data.needsAX) {
@@ -113,15 +114,14 @@ axopenEl.addEventListener('click', () => window.quick.openAccessibility());
 
 document.getElementById('close').addEventListener('click', () => window.quick.close());
 
+// 关闭：设置里的关闭键；复制译文：设置里的复制译文键
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { e.preventDefault(); window.quick.close(); }
-  // ⌘C 在没选中任何文字时直接复制译文，省一次点击
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
-    if (!window.getSelection().toString() && currentTranslation) {
-      e.preventDefault();
-      window.quick.copy(currentTranslation);
-      setCopyState(false, 'copied');
-      setTimeout(() => { if (currentTranslation) setCopyState(true, 'copy'); }, 1200);
-    }
+  const keys = window.ttyKeys.get();
+  if (window.ttyKeys.match(e, keys.dismissKey)) { e.preventDefault(); window.quick.close(); return; }
+  if (window.ttyKeys.match(e, keys.copyTextKey) && currentTranslation) {
+    e.preventDefault();
+    window.quick.copy(currentTranslation);
+    setCopyState(false, 'copied');
+    setTimeout(() => { if (currentTranslation) setCopyState(true, 'copy'); }, 1200);
   }
 });

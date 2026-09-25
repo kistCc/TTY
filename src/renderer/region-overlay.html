@@ -40,10 +40,7 @@ html, body {
 <canvas id="result"></canvas>
 <div id="toast"></div>
 <!-- 和全屏浮层用同一套渲染：按段折行、字号跟原文、先擦后画 -->
+<script src="keys.js"></script>
 <script src="overlay.js"></script>
-<script>
-  // 区域浮层额外支持 Esc 关闭
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.api.close(); });
-</script>
 </body>
 </html>

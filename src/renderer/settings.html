@@ -96,7 +96,7 @@
     <div class="field">
       <label data-i18n="hotkeyDismiss">Dismiss</label>
       <div style="display:flex;gap:6px;align-items:center;">
-        <input id="dismissKey" type="text" readonly style="flex:1;cursor:pointer;min-width:0;" placeholder="⎋" data-hotkey="dismissKey">
+        <input id="dismissKey" type="text" readonly style="flex:1;cursor:pointer;min-width:0;" placeholder="⎋" data-hotkey="dismissKey" data-single="1">
         <button class="recordBtn" data-target="dismissKey" data-i18n="record">Record</button>
       </div>
     </div>
@@ -124,6 +124,34 @@
         <button class="recordBtn" data-target="clipKey" data-i18n="record">Record</button>
       </div>
     </div>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label data-i18n="hotkeyCopyImage">Copy Sticker</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input id="copyImageKey" type="text" readonly style="flex:1;cursor:pointer;min-width:0;" placeholder="⌘C" data-hotkey="copyImageKey" data-single="1">
+        <button class="recordBtn" data-target="copyImageKey" data-i18n="record">Record</button>
+      </div>
+    </div>
+    <div class="field">
+      <label data-i18n="hotkeyCopyText">Copy Text</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input id="copyTextKey" type="text" readonly style="flex:1;cursor:pointer;min-width:0;" placeholder="⇧⌘C" data-hotkey="copyTextKey" data-single="1">
+        <button class="recordBtn" data-target="copyTextKey" data-i18n="record">Record</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label data-i18n="hotkeyPeek">Hold for Original</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input id="peekKey" type="text" readonly style="flex:1;cursor:pointer;min-width:0;" placeholder="␣" data-hotkey="peekKey" data-single="1">
+        <button class="recordBtn" data-target="peekKey" data-i18n="record">Record</button>
+      </div>
+    </div>
+    <div class="field"></div>
   </div>
 
   <div class="row">

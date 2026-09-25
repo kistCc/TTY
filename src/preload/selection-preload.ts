@@ -11,3 +11,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('selection-background', (_e, dataUrl) => callback(dataUrl));
   },
 });
+
+// 快捷键设置（renderer/keys.js 用它按设置匹配按键）
+contextBridge.exposeInMainWorld('ttyConfig', {
+  keys: () => ipcRenderer.sendSync('tty-keys'),
+});

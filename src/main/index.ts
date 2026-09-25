@@ -1,4 +1,4 @@
-import { app, screen, systemPreferences, dialog } from 'electron';
+import { app, screen, systemPreferences, dialog, ipcMain } from 'electron';
 import * as nodePath from 'path';
 
 // 必须在任何代码读取 userData 之前执行：应用名和配置目录一起设为 TTY。
@@ -47,15 +47,9 @@ const MAX_CACHE_SIZE = 5;
 let pendingCacheKey: string | null = null;
 let pendingCacheBlocks: any[] | null = null;
 
+/// 全屏翻译键只管"开始翻译"。浮层已经开着时什么都不做——关浮层只认设置里的关闭键。
 function toggleTranslate() {
-  if (isOverlayVisible()) {
-    hideOverlay();
-    sendHotkeyState('HIDDEN');
-    pendingCacheKey = null;
-    pendingCacheBlocks = null;
-    updateTrayMenu();
-    return;
-  }
+  if (isOverlayVisible()) return;
   const now = Date.now();
   if (isProcessing || isRegionProcessing || now - lastTriggerTime < DEBOUNCE_MS) {
     // The native monitor already flipped itself into "translating" when it emitted
@@ -108,6 +102,16 @@ app.whenReady().then(() => {
       exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"');
     }
   }
+
+  // 贴图、小窗、框选窗口里的按键按设置匹配。用同步 IPC，每次按键都读最新的设置，
+  // 在设置页改完不用重开窗口
+  ipcMain.on('tty-keys', (event) => {
+    const c = getConfig();
+    event.returnValue = {
+      dismissKey: c.dismissKey, copyImageKey: c.copyImageKey,
+      copyTextKey: c.copyTextKey, peekKey: c.peekKey,
+    };
+  });
 
   createTray();
   ensureOverlayWindow(); // Pre-create for instant display
@@ -211,7 +215,7 @@ app.whenReady().then(() => {
         setTimeout(() => hideLoading(), 800);
       }
     },
-    // onCancel — ESC or re-trigger during translating
+    // onCancel — 正在翻译时按了关闭键
     () => {
       cancelSelection();
       if (isProcessing) {
@@ -228,14 +232,9 @@ app.whenReady().then(() => {
         hideLoading();
       }
     },
-    // onRegion — toggle: if selection is open, close it; otherwise start region translate
+    // onRegion — 开始区域翻译。已经在框选时什么都不做：取消框选只认设置里的关闭键
     () => {
-      // Already in selection mode — close it (toggle off)
-      if (isSelectionActive()) {
-        cancelSelection();
-        isRegionProcessing = false;
-        return;
-      }
+      if (isSelectionActive()) return;
       const now = Date.now();
       if (isProcessing || isRegionProcessing || now - lastRegionTriggerTime < DEBOUNCE_MS) return;
       lastRegionTriggerTime = now;

@@ -272,10 +272,9 @@ function startGlobalBackend(trigger: HotkeyConfig, region: HotkeyConfig) {
 
   // The native helper decides between TRIGGERED / DISMISS / CANCEL from its own
   // state. Here we do the same dispatch from the state Electron reports to us.
+  // 全屏翻译键只在空闲时开始翻译；浮层开着、正在翻译时都不响应——关闭、取消只认关闭键
   if (!register(triggerAccel, () => {
-    if (currentState === 'SHOWN') dismissFn?.();
-    else if (currentState === 'TRANSLATING') cancelFn?.();
-    else triggerFn?.();
+    if (currentState === 'HIDDEN') triggerFn?.();
   })) failed.push(triggerAccel);
 
   if (regionAccel !== triggerAccel) {
@@ -340,8 +339,8 @@ function unregisterTransient() {
 
 function hotkeyToNativeArg(hotkey: string | undefined, fallback: string): string {
   const config = parseSlot(hotkey, fallback);
-  // The helper's arg format carries a single modifier, so pass the first.
-  const parts = [config.modifiers[0] || 'none', ...config.keycodes.map(String)];
+  // 修饰键全部带上（逗号分隔），原生程序按"修饰键完全一致"匹配
+  const parts = [config.modifiers.join(',') || 'none', ...config.keycodes.map(String)];
   return parts.join(':');
 }
 

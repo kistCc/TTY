@@ -20,6 +20,12 @@ export interface Config {
   textKey: string;
   /// 复制翻译：翻译剪贴板里的文本（不需要任何权限）。
   clipKey: string;
+  /// 贴图上复制整张贴图（贴图要先点一下拿到焦点）。
+  copyImageKey: string;
+  /// 贴图上复制译文；划词/复制翻译的小窗里也是这个键。
+  copyTextKey: string;
+  /// 贴图上按住显示原文，松开回到译文。
+  peekKey: string;
   /// 首次启动弹过设置窗之后置为 true，之后启动只驻留菜单栏，不再弹窗。
   launchedBefore?: boolean;
   /// 登录时自动启动（静默，不显示任何窗口）。
@@ -48,6 +54,9 @@ const DEFAULT_CONFIG: Config = {
   regionKey: 'alt+cmd+r',
   textKey: 'alt+d',
   clipKey: 'alt+c',
+  copyImageKey: 'cmd+c',
+  copyTextKey: 'shift+cmd+c',
+  peekKey: 'space',
   openAtLogin: false,
   targetLanguage: 'zh-CN',
   provider: 'google',

@@ -163,7 +163,7 @@ window.api.onShowTranslation((data) => {
   img.src = data.screenshotDataUrl || `file://${screenshotPath}`;
 });
 
-// Edge-aware window drag + resize + double-click dismiss
+// Edge-aware window drag + resize
 const EDGE = 10;
 function getEdgeMode(e) {
   const w = window.innerWidth, h = window.innerHeight;
@@ -203,9 +203,6 @@ document.addEventListener('mousemove', (e) => {
   }
 });
 document.addEventListener('mouseup', () => { drag = null; });
-document.addEventListener('dblclick', () => {
-  window.api.dismiss();
-});
 
 // Pinch-to-zoom: macOS trackpad pinch arrives as wheel event with ctrlKey
 document.addEventListener('wheel', (e) => {
@@ -216,9 +213,8 @@ document.addEventListener('wheel', (e) => {
 
 
 // ---------------------------------------------------------------------------
-// 贴图复制（Snipaste 那种手感）：点一下浮层让它拿到焦点，⌘C 就把整张贴图
-// 连同译文一起放进剪贴板，可以直接粘到微信、备忘录、文档里。
-// ⇧⌘C 则复制纯译文——有时候要的是字，不是图。
+// 贴图上的快捷键全部按设置走（Snipaste 那种手感：点一下贴图让它拿到焦点，再按键）：
+// 关闭、复制整张贴图、复制译文、按住看原文。
 // ---------------------------------------------------------------------------
 
 let stickerBlocks = [];
@@ -241,23 +237,33 @@ function collectTranslations() {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (!(e.metaKey || e.ctrlKey)) return;
-  if (e.key.toLowerCase() !== 'c') return;
-  e.preventDefault();
-
-  if (e.shiftKey) {
+  const keys = window.ttyKeys.get();
+  if (window.ttyKeys.match(e, keys.dismissKey)) {
+    e.preventDefault();
+    window.api.dismiss();
+    return;
+  }
+  if (window.ttyKeys.match(e, keys.copyTextKey)) {
+    e.preventDefault();
     const text = collectTranslations();
     if (!text) { showToast('没有可复制的译文'); return; }
     window.api.copyText(text);
     showToast('已复制译文');
     return;
   }
-
-  try {
-    window.api.copyImage(canvas.toDataURL('image/png'));
-    showToast('已复制贴图');
-  } catch (err) {
-    showToast('复制失败');
+  if (window.ttyKeys.match(e, keys.copyImageKey)) {
+    e.preventDefault();
+    try {
+      window.api.copyImage(canvas.toDataURL('image/png'));
+      showToast('已复制贴图');
+    } catch (err) {
+      showToast('复制失败');
+    }
+    return;
+  }
+  if (window.ttyKeys.match(e, keys.peekKey)) {
+    e.preventDefault();
+    if (!e.repeat) showOriginal(true);
   }
 });
 
@@ -268,25 +274,17 @@ window.api.onClear(() => {
   showingOriginal = false;
 });
 
-// ---------------------------------------------------------------------------
-// 按住空格看原文，松开回到译文。浮层要先点一下拿到焦点（和 ⌘C 一样）。
-// ---------------------------------------------------------------------------
-
+// 按住「看原文」键显示原文，松开回到译文
 function showOriginal(on) {
   if (!originalCanvas || !translatedCanvas || on === showingOriginal) return;
   showingOriginal = on;
   ctx.drawImage(on ? originalCanvas : translatedCanvas, 0, 0);
 }
 
-document.addEventListener('keydown', (e) => {
-  if (e.code !== 'Space' || e.metaKey || e.ctrlKey || e.altKey) return;
-  e.preventDefault();
-  if (!e.repeat) showOriginal(true);
-});
 document.addEventListener('keyup', (e) => {
-  if (e.code === 'Space') showOriginal(false);
+  if (window.ttyKeys.isKeyOf(e, window.ttyKeys.get().peekKey)) showOriginal(false);
 });
-// 按着空格切走了（⌘Tab、点了别的窗口），收不到松开，回来时别一直停在原文
+// 按着键切走了（⌘Tab、点了别的窗口），收不到松开，回来时别一直停在原文
 window.addEventListener('blur', () => showOriginal(false));
 
 

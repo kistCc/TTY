@@ -25,12 +25,24 @@ static const CFTimeInterval COOLDOWN = 1.0;
 static CFAbsoluteTime translatingSince = 0;
 static const CFTimeInterval TRANSLATING_TIMEOUT = 30.0;
 
-static CGEventFlags parseModifier(NSString *mod) {
-    if ([mod isEqualToString:@"shift"]) return kCGEventFlagMaskShift;
-    if ([mod isEqualToString:@"cmd"])   return kCGEventFlagMaskCommand;
-    if ([mod isEqualToString:@"alt"])   return kCGEventFlagMaskAlternate;
-    if ([mod isEqualToString:@"ctrl"])  return kCGEventFlagMaskControl;
-    return 0;
+/// "alt,cmd" 这种逗号分隔的修饰键列表，合成一个掩码
+static CGEventFlags parseModifier(NSString *mods) {
+    CGEventFlags out = 0;
+    for (NSString *mod in [mods componentsSeparatedByString:@","]) {
+        if ([mod isEqualToString:@"shift"]) out |= kCGEventFlagMaskShift;
+        if ([mod isEqualToString:@"cmd"])   out |= kCGEventFlagMaskCommand;
+        if ([mod isEqualToString:@"alt"])   out |= kCGEventFlagMaskAlternate;
+        if ([mod isEqualToString:@"ctrl"])  out |= kCGEventFlagMaskControl;
+    }
+    return out;
+}
+
+static const CGEventFlags ALL_MODS = kCGEventFlagMaskShift | kCGEventFlagMaskCommand
+                                   | kCGEventFlagMaskAlternate | kCGEventFlagMaskControl;
+
+/// 修饰键必须和设置的完全一致：设了 ⌥⎋，单按 ⎋、按 ⌘⌥⎋ 都不算
+static inline BOOL modsMatch(CGEventFlags flags, HotkeyDef hk) {
+    return (flags & ALL_MODS) == hk.modifier;
 }
 
 static HotkeyDef parseHotkey(NSString *str) {
@@ -63,8 +75,6 @@ CGEventRef eventCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef eve
         translatingMode = NO;
     }
 
-    // Mouse clicks are now handled by the overlay window itself (double-click to dismiss)
-
     if (type != kCGEventKeyDown && type != kCGEventKeyUp) return event;
 
     CGKeyCode keycode = (CGKeyCode)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
@@ -76,10 +86,10 @@ CGEventRef eventCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef eve
         if (keycode == regionHK.key1) rKey1Down = YES;
         if (regionHK.dualKey && keycode == regionHK.key2) rKey2Down = YES;
 
-        BOOL modOK = (triggerHK.modifier == 0) || ((flags & triggerHK.modifier) != 0);
+        BOOL modOK = modsMatch(flags, triggerHK);
         BOOL triggered = triggerHK.dualKey ? (modOK && tKey1Down && tKey2Down) : (modOK && keycode == triggerHK.key1);
 
-        BOOL regionModOK = (regionHK.modifier == 0) || ((flags & regionHK.modifier) != 0);
+        BOOL regionModOK = modsMatch(flags, regionHK);
         BOOL regionTriggered = regionHK.dualKey ? (regionModOK && rKey1Down && rKey2Down) : (regionModOK && keycode == regionHK.key1);
 
         if (regionTriggered && !translatingMode && !overlayMode) {
@@ -91,27 +101,20 @@ CGEventRef eventCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef eve
             return event;
         }
 
+        // 全屏翻译键只在空闲时开始翻译；浮层开着、正在翻译时都不响应——关闭、取消只认关闭键
         if (triggered) {
             tKey1Down = NO; tKey2Down = NO;
+            if (overlayMode || translatingMode) return event;
             if (now - lastActionTime < COOLDOWN) return event;
-            if (overlayMode) {
-                printf("DISMISS\n"); fflush(stdout);
-                overlayMode = NO;
-            } else if (translatingMode) {
-                // Already translating → cancel
-                printf("CANCEL\n"); fflush(stdout);
-                translatingMode = NO;
-            } else {
-                printf("TRIGGERED\n"); fflush(stdout);
-                translatingMode = YES;
-                translatingSince = now;
-            }
+            printf("TRIGGERED\n"); fflush(stdout);
+            translatingMode = YES;
+            translatingSince = now;
             lastActionTime = now;
             return event;
         }
 
-        // ESC (keycode 53, hardcoded) → cancel translation in progress
-        if (translatingMode && !overlayMode && keycode == 53) {
+        // 正在翻译时按关闭键 = 取消
+        if (translatingMode && !overlayMode && modsMatch(flags, dismissHK) && keycode == dismissHK.key1) {
             printf("CANCEL\n"); fflush(stdout);
             translatingMode = NO; lastActionTime = now;
             tKey1Down = NO; tKey2Down = NO;
@@ -120,8 +123,7 @@ CGEventRef eventCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef eve
 
         if (overlayMode) {
             // Save cache
-            BOOL cacheMod = (cacheHK.modifier == 0) || ((flags & cacheHK.modifier) != 0);
-            if (cacheMod && keycode == cacheHK.key1) {
+            if (modsMatch(flags, cacheHK) && keycode == cacheHK.key1) {
                 printf("SAVE_CACHE\n"); fflush(stdout);
                 // Keep overlayMode = YES — overlay stays visible after caching
                 lastActionTime = now;
@@ -130,8 +132,7 @@ CGEventRef eventCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef eve
             }
 
             // Dismiss overlay (configurable key)
-            BOOL dismissMod = (dismissHK.modifier == 0) || ((flags & dismissHK.modifier) != 0);
-            if (dismissMod && keycode == dismissHK.key1) {
+            if (modsMatch(flags, dismissHK) && keycode == dismissHK.key1) {
                 printf("DISMISS\n"); fflush(stdout);
                 overlayMode = NO; lastActionTime = now;
                 tKey1Down = NO; tKey2Down = NO;

@@ -29,3 +29,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.send('overlay-resize-edge', { mode, dx, dy });
   },
 });
+
+// 快捷键设置（renderer/keys.js 用它按设置匹配按键）
+contextBridge.exposeInMainWorld('ttyConfig', {
+  keys: () => ipcRenderer.sendSync('tty-keys'),
+});

@@ -15,6 +15,7 @@ const I18N = {
     hotkeyTranslate: 'Full Screen', hotkeyRegion: 'Region',
     hotkeyDismiss: 'Dismiss', hotkeyCache: 'Cache',
     hotkeyText: 'Selection', hotkeyClip: 'Clipboard',
+    hotkeyCopyImage: 'Copy Sticker', hotkeyCopyText: 'Copy Text', hotkeyPeek: 'Hold for Original',
     startup: 'Startup', openAtLogin: 'Launch at login',
     record: 'Record', stop: 'Stop',
     targetLang: 'Target Language', provider: 'Provider',
@@ -33,6 +34,7 @@ const I18N = {
     hotkeyTranslate: '全屏翻译', hotkeyRegion: '选区翻译',
     hotkeyDismiss: '关闭浮层', hotkeyCache: '缓存',
     hotkeyText: '划词翻译', hotkeyClip: '复制翻译',
+    hotkeyCopyImage: '复制贴图', hotkeyCopyText: '复制译文', hotkeyPeek: '看原文（按住）',
     startup: '启动', openAtLogin: '开机自启',
     record: '录制', stop: '停止',
     targetLang: '目标语言', provider: '翻译服务',
@@ -215,6 +217,9 @@ async function doSave() {
     cacheKey: hotkeyValue('cacheKey') || 'shift+s',
     textKey: hotkeyValue('textKey') || 'alt+d',
     clipKey: hotkeyValue('clipKey') || 'alt+c',
+    copyImageKey: hotkeyValue('copyImageKey') || 'cmd+c',
+    copyTextKey: hotkeyValue('copyTextKey') || 'shift+cmd+c',
+    peekKey: hotkeyValue('peekKey') || 'space',
     openAtLogin: document.getElementById('openAtLogin').checked,
     targetLanguage: document.getElementById('targetLanguage').value,
     provider,
@@ -296,7 +301,9 @@ function onRecordKey(e) {
   activeRecordInput.dataset.value = canonical;
   activeRecordInput.value = prettyHotkey(canonical);
   // 只有「单按 Shift + 一个键」时继续等第二个键（和弦）；其他情况直接结束。
-  if (keys.length >= 2 || !e.shiftKey || mods.length !== 1) stopRecording();
+  // 贴图、小窗里用的键（关闭、复制、看原文）不支持和弦，按下一个键就结束。
+  const single = activeRecordInput.dataset.single === '1';
+  if (single || keys.length >= 2 || !e.shiftKey || mods.length !== 1) stopRecording();
 }
 document.addEventListener('keyup', () => {
   if (activeRecordBtn && recordedKeys.size > 0) recordedKeys.clear();
@@ -316,6 +323,9 @@ window.api.getConfig().then(config => {
   setHotkeyField('cacheKey', config.cacheKey || 'shift+s');
   setHotkeyField('textKey', config.textKey || 'alt+d');
   setHotkeyField('clipKey', config.clipKey || 'alt+c');
+  setHotkeyField('copyImageKey', config.copyImageKey || 'cmd+c');
+  setHotkeyField('copyTextKey', config.copyTextKey || 'shift+cmd+c');
+  setHotkeyField('peekKey', config.peekKey || 'space');
   document.getElementById('openAtLogin').checked = !!config.openAtLogin;
   document.getElementById('targetLanguage').value = config.targetLanguage || 'zh-CN';
   providerSelect.value = config.provider || 'google';
