@@ -141,6 +141,10 @@ window.input.onResult((data) => {
 
 textEl.addEventListener('input', autoGrow);
 
+// 输入法拼字期间让窗口降一层，候选框才不会被挡住（主进程 input.ts 里有说明）
+textEl.addEventListener('compositionstart', () => window.input.setComposing(true));
+textEl.addEventListener('compositionend', () => window.input.setComposing(false));
+
 textEl.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
   // 输入法还在选字时的回车是确认候选字，不是翻译

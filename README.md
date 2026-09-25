@@ -7,7 +7,7 @@
 <p align="center"><strong>贴图翻译 · macOS 屏幕翻译工具 · 全屏翻译 · 选区翻译 · 像素级原位覆盖</strong></p>
 
 <p align="center">
-  <a href="https://github.com/kistCc/TTY/releases/latest"><img src="https://img.shields.io/badge/Release-v1.4.0-blue?style=flat" alt="Release"></a>
+  <a href="https://github.com/kistCc/TTY/releases/latest"><img src="https://img.shields.io/badge/Release-v1.4.1-blue?style=flat" alt="Release"></a>
   <a href="https://github.com/kistCc/TTY/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey?style=flat" alt="macOS">
   <img src="https://img.shields.io/badge/Electron-33-47848f?style=flat" alt="Electron">
@@ -26,7 +26,7 @@
 上游作者 **[@Archer-SQ](https://github.com/Archer-SQ)**，原项目以 MIT 许可证发布。
 截图、OCR、翻译、像素级原位覆盖这套核心设计全部来自上游，在此致谢。
 
-本仓库基于上游 v1.2.3，当前版本 v1.4.0。主要改动：
+本仓库基于上游 v1.2.3，当前版本 v1.4.1。主要改动：
 
 | 改动 | 说明 |
 |---|---|
@@ -36,7 +36,7 @@
 | **隐私** | 关闭浮层即删除整屏截图，不再留在临时目录 |
 | **更名 TTY** | 应用名与图标（蓝色牡丹鹦鹉）均为本分支自制 |
 | **划词翻译** | `⌥D` 翻译当前选中的文本，结果显示在鼠标旁；优先走辅助功能接口，取不到时借剪贴板（菜单栏拷贝项优先于模拟按键），用完原样还回去 |
-| **输入翻译** | `⌥C` 在鼠标旁弹出输入框，直接打字，回车翻译（⇧回车换行）；默认中文翻成英文、外文翻成目标语言，也可以在顶上的「翻成」下拉里固定选一种语言（选过就记住）。取代了原来的「复制翻译」 |
+| **输入翻译** | `⌥C` 在鼠标旁弹出输入框，直接打字，回车翻译（⇧回车换行）；默认中文翻成英文、外文翻成目标语言，也可以在顶上的「翻成」下拉里固定选一种语言（选过就记住）；用输入法打字时候选框不会被输入框挡住。取代了原来的「复制翻译」 |
 | **贴图复制** | 翻译浮层上 `⌘C` 复制整张贴图、`⇧⌘C` 复制译文（都可在设置里改）；点击浮层即获得键盘焦点 |
 | **启动不打扰** | 只驻留菜单栏，仅首次安装弹一次设置窗；可设为开机自启 |
 | **全屏翻译提速** | 翻译批次并发、翻译前按文本去重、OCR 切图改用 JPEG |

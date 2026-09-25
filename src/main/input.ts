@@ -28,6 +28,18 @@ ipcMain.on('input-copy', (_e, text: string) => {
   if (typeof text === 'string' && text) clipboard.writeText(text);
 });
 
+// 输入法拼字时把窗口临时降到 floating 层，拼完再升回 screen-saver。
+// 平时要在 screen-saver 层才压得住屏幕上的贴图；但输入法的候选框层级比它低，
+// 一直待在这层的话，候选框会被输入框挡在下面。
+ipcMain.on('input-composing', (_e, composing: boolean) => {
+  if (!inputWin || inputWin.isDestroyed()) return;
+  setInputLevel(inputWin, composing === true);
+});
+
+function setInputLevel(win: BrowserWindow, composing: boolean) {
+  win.setAlwaysOnTop(true, composing ? 'floating' : 'screen-saver');
+}
+
 ipcMain.on('input-height', (_e, height: number) => {
   if (!inputWin || inputWin.isDestroyed()) return;
   const h = Math.round(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, height)));
@@ -106,7 +118,6 @@ function ensureInputWindow(): BrowserWindow {
   });
 
   inputWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  inputWin.setAlwaysOnTop(true, 'screen-saver');
   inputWin.loadFile(path.join(app.getAppPath(), 'src', 'renderer', 'input.html'));
 
   // 点到窗口外面就收起来，和划词小窗一致。这时焦点已经在用户点的地方，不用还
@@ -136,6 +147,7 @@ export function showInputTranslate() {
   const saved = getConfig().inputTargetLang;
   send(win, 'input-show', { lang: isChineseUI() ? 'zh' : 'en', chosen: saved && TARGETS.includes(saved) ? saved : 'auto' });
   positionNearCursor(win, MIN_HEIGHT);
+  setInputLevel(win, false); // 上次拼到一半就关掉的话，层级可能还停在 floating
   win.show();
   // 要打字，所以一定要拿到键盘焦点
   focusSticker(win);

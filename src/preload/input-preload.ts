@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('input', {
   close: () => ipcRenderer.send('input-close'),
   copy: (text: string) => ipcRenderer.send('input-copy', text),
   reportHeight: (height: number) => ipcRenderer.send('input-height', height),
+  setComposing: (composing: boolean) => ipcRenderer.send('input-composing', composing),
 });
 
 // 快捷键设置（renderer/keys.js 用它按设置匹配按键）
