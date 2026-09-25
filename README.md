@@ -7,7 +7,7 @@
 <p align="center"><strong>贴图翻译 · macOS 屏幕翻译工具 · 全屏翻译 · 选区翻译 · 像素级原位覆盖</strong></p>
 
 <p align="center">
-  <a href="https://github.com/kistCc/TTY/releases/latest"><img src="https://img.shields.io/badge/Release-v1.3.5-blue?style=flat" alt="Release"></a>
+  <a href="https://github.com/kistCc/TTY/releases/latest"><img src="https://img.shields.io/badge/Release-v1.4.0-blue?style=flat" alt="Release"></a>
   <a href="https://github.com/kistCc/TTY/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey?style=flat" alt="macOS">
   <img src="https://img.shields.io/badge/Electron-33-47848f?style=flat" alt="Electron">
@@ -26,7 +26,7 @@
 上游作者 **[@Archer-SQ](https://github.com/Archer-SQ)**，原项目以 MIT 许可证发布。
 截图、OCR、翻译、像素级原位覆盖这套核心设计全部来自上游，在此致谢。
 
-本仓库基于上游 v1.2.3，当前版本 v1.3.5。主要改动：
+本仓库基于上游 v1.2.3，当前版本 v1.4.0。主要改动：
 
 | 改动 | 说明 |
 |---|---|
@@ -48,6 +48,8 @@
 | **按排版常识分段** | 上一行明明放得下下一个词却换行 = 段落结束；列表记号开头另起一条；段间距按这一页自己的单倍行距判断；字重不同（粗体标题/标签）不并段。设置页、FAQ、列表、书信不再并成一大团 |
 | **不同窗口的字不串** | 截图那一刻记下各窗口位置，不同窗口里的字永远不会被接成一句 |
 | **区域翻译与全屏一致** | 区域截图翻译改用全屏同一套渲染（按段折行、字号跟原文、不再横向压扁）；并排的按钮按像素空白分开，不再连成一句 |
+| **保持原文颜色** | 译文按原文的颜色画：句子里的蓝色链接、红色警告、绿色高亮，译过来还是那几个词带颜色，链接的下划线也保留。原生 OCR 按词量出字色，翻译前用标记把彩色的词包起来，回来按标记找到它们在译文里的位置。需要翻译服务把标记原样带回来：Google、DeepL、OpenAI、Claude、Ollama 支持；**有道会丢标记、还会连累译文，用有道时不上色**，按以前的黑白字画 |
+| **按住空格看原文** | 翻译浮层上按住空格显示原文，松开回到译文，方便对照（先点一下浮层让它拿到焦点） |
 | **六家翻译服务统一** | 有道 / Google / DeepL / OpenAI / Claude / Ollama 统一分批、条数对不上逐条重翻、失败保留原文、产品名不丢；报错显示成一句人话，不再是乱码 |
 
 完整改动见 commit 历史；第一个 commit 是上游 v1.2.3 的原始状态，可直接 diff。
@@ -81,7 +83,7 @@
 ### 核心
 - **两种翻译模式** — 全屏一键翻译 / 选区框选翻译
 - **冻结截图** — 按下快捷键瞬间画面冻结，动态视频、游戏、动画也能精确框选
-- **像素级原位覆盖** — Canvas 直接绘制，自动匹配字号和背景色，看起来像原生汉化
+- **像素级原位覆盖** — Canvas 直接绘制，自动匹配字号、背景色和字色（链接、高亮的词保留原来的颜色和下划线），看起来像原生汉化
 - **多屏支持** — 自动检测光标所在屏，翻译那一屏
 
 ### 浮层交互
@@ -89,11 +91,11 @@
 - **8 方向边缘缩放** — 窗口边缘鼠标自动切换 resize 光标
 - **触控板双指捏合缩放** — 支持 Apple 触控板手势
 - **双击关闭** — 简洁统一
+- **按住空格看原文** — 松开回到译文
 - **常驻置顶** — 可覆盖全屏应用
 
 ### OCR & 翻译
 - **整屏识别 + 版面重建** — 整屏一次 OCR，再按行距/左边缘/字号把文本块还原成段落，整段翻译整段覆盖
-- **对比度增强预处理** — Core Image 改善低对比度文字（终端、dim UI）
 - **Vision Revision 3** — 使用 macOS 最新 OCR 模型
 - **多引擎** — Google（免费）/ 有道（免费）/ OpenAI / Anthropic / DeepL / Ollama
 - **翻译缓存** — `Shift+S` 手动保存，相同内容秒显
@@ -159,8 +161,8 @@ npm run dist
 
 | 服务 | API Key | 说明 |
 |------|:---:|------|
-| **Google 翻译** | 否 | 免费内置，自动代理 |
-| **有道翻译** | 否 | 免费内置，走网页版接口，国内直连 |
+| **Google 翻译** | 否 | 免费内置，自动代理；支持保持原文颜色 |
+| **有道翻译** | 否 | 免费内置，走网页版接口，国内直连；不支持保持原文颜色 |
 | **OpenAI 兼容** | 是 | GPT-4o-mini，支持自定义端点 |
 | **Anthropic 兼容** | 是 | Claude、MiniMax 等 |
 | **DeepL** | 是 | 欧洲语言高质量 |
@@ -189,6 +191,7 @@ src/main/                主进程（TypeScript）
   index.ts               翻译流程编排
   screenshot.ts          区域截图（screencapture -R）
   ocr.ts                 调用 OCR 二进制（整屏识别）
+  ink.ts                 字色：定主色、挑出色段、翻译标记的包裹与还原
   accessibility.ts       AX API 包装
   translator.ts          翻译服务调度（含文本去重）
   batch.ts               批次切分与并发调度
@@ -210,7 +213,7 @@ src/renderer/            渲染层（纯 HTML/JS）
   settings.html/js       设置页面（中英双语）
 
 scripts/                 原生 macOS 工具（Objective-C）
-  ocr-macos.m            Vision OCR + Core Image 对比度增强
+  ocr-macos.m            Vision OCR + 按词量字色、认下划线
   hotkey-macos.m         CGEventTap 全局热键
   axtext-macos.m         Accessibility 文字读取
 ```
@@ -231,4 +234,4 @@ MIT
 |---|---|
 | [@kistCc](https://github.com/kistCc) | 本分支维护 |
 | [@Archer-SQ](https://github.com/Archer-SQ) | 上游 [screen-translator](https://github.com/Archer-SQ/screen-translator) 作者 |
-| [Claude](https://claude.com/claude-code)（Anthropic） | v1.3.x 的有道翻译接入、全屏整段翻译重构、图标与文档，由 Claude 结对完成 |
+| [Claude](https://claude.com/claude-code)（Anthropic） | v1.3.x 的有道翻译接入、全屏整段翻译重构、图标与文档，v1.4.0 的保持原文颜色，由 Claude 结对完成 |

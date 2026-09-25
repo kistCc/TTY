@@ -8,7 +8,8 @@ app.setPath('userData', nodePath.join(app.getPath('appData'), 'TTY'));
 import { takeScreenshot } from './screenshot';
 import { performOCR, listWindows, textSimilarity, TextBlock, WindowRect } from './ocr';
 import { getAccessibilityText, AXTextBlock } from './accessibility';
-import { translate } from './translator';
+import { translateWithInk, inkSupported } from './translator';
+import { mergeInk } from './ink';
 import { getConfig, saveConfig, migrateConfig, applyLoginItem } from './config';
 import { debugLog, debugLogVerbose } from './native';
 import { joinParts as joinLines } from './text-join';
@@ -321,13 +322,7 @@ async function handleTranslate() {
     }
 
     // Convert OCR physical pixel coords → CSS pixels using exact scaleFactor
-    const cssBlocks = textBlocks.map(b => ({
-      ...b,
-      x: b.x / scaleFactor,
-      y: b.y / scaleFactor,
-      width: b.width / scaleFactor,
-      height: b.height / scaleFactor,
-    }));
+    const cssBlocks = textBlocks.map(b => toCss(b, scaleFactor));
 
     // Cache by text content
     const textKey = cssBlocks.map(b => b.text).sort().join('|');
@@ -371,12 +366,15 @@ async function handleTranslate() {
         showLoading(t('translatingPct', { n: Math.floor(tp) }));
       }
     }, 400);
-    const texts = paragraphs.map(b => b.text);
-    const translations = await translate(texts, targetLang, config);
-    debugLog(`翻译回来 ${translations.length} 条`);
+    const inkOn = inkSupported(config.provider);
+    const results = await translateWithInk(paragraphs, targetLang, config, inkOn);
+    const translations = results.map(r => r.text);
+    debugLog(`翻译回来 ${translations.length} 条（保持颜色：${inkOn ? '开' : '关，当前翻译服务保不住颜色标记'}）`);
     paragraphs.forEach((b, i) => debugLog(
-      `  [${i}] ${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}x${Math.round(b.height)} ${b.lineCount}行\n` +
-      `      原: ${b.text}\n      译: ${translations[i] ?? ''}`
+      `  [${i}] ${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}x${Math.round(b.height)} ${b.lineCount}行` +
+      `${b.ink ? ` 主色 ${b.ink.join(',')}` : ''}${b.runs?.length ? ` 色段 ${b.runs.map(r => `「${r.text}」${r.ink.join(',')}${r.underline ? '_' : ''}`).join(' ')}` : ''}\n` +
+      `      原: ${b.text}\n      译: ${translations[i] ?? ''}` +
+      `${results[i]?.spans.length ? `\n      上色: ${results[i].spans.map(s => `「${translations[i].slice(s.start, s.end)}」`).join(' ')}` : ''}`
     ));
     if (activeProgressTimer) { clearInterval(activeProgressTimer); activeProgressTimer = null; }
     if (isCancelled) { cleanup(screenshotPath); return; }
@@ -386,7 +384,7 @@ async function handleTranslate() {
     const failed = paragraphs.filter((_, i) => !translations[i]);
     if (failed.length) debugLog(`有 ${failed.length} 段没翻出来，保持原文不动`);
     const translatedBlocks = paragraphs
-      .map((block, i) => ({ ...block, translated: translations[i] || '' }))
+      .map((block, i) => withTranslation(block, results[i], inkOn))
       .filter(b => b.translated);
 
     // Store pending cache — only saved if user presses Shift+S
@@ -403,7 +401,7 @@ async function handleTranslate() {
       blocks: translatedBlocks,
       eraseRects: cssBlocks
         .filter(r => !failed.some(f => rectOverlapRatio(f, r) > 0.5))
-        .map(b => ({ x: b.x, y: b.y, width: b.width, height: b.height })),
+        .map(eraseRectOf),
       displayBounds: display.bounds,
     });
     sendHotkeyState('SHOWN');
@@ -469,6 +467,34 @@ function filterForeignBlocks(blocks: TextBlock[], targetLang: string): TextBlock
     }
     return true;
   });
+}
+
+/// OCR 给的是物理像素，浮层用 CSS 像素
+function toCss(b: TextBlock, scaleFactor: number): TextBlock {
+  return {
+    ...b,
+    x: b.x / scaleFactor,
+    y: b.y / scaleFactor,
+    width: b.width / scaleFactor,
+    height: b.height / scaleFactor,
+    eraseBottom: b.eraseBottom !== undefined ? b.eraseBottom / scaleFactor : undefined,
+  };
+}
+
+/// 擦原文的范围：框本身，框下面伸出去的下划线也要擦（最多伸出去半个框高，
+/// 再远就不是这行字的下划线了）
+function eraseRectOf(b: TextBlock) {
+  const bottom = b.y + b.height;
+  const extra = b.eraseBottom && b.eraseBottom > bottom && b.eraseBottom <= bottom + b.height * 0.6 ? b.eraseBottom - bottom : 0;
+  return { x: b.x, y: b.y, width: b.width, height: b.height + extra };
+}
+
+/// 段落配上译文。颜色关掉时把颜色信息整个拿掉，浮层就按以前的黑白字画。
+function withTranslation(block: ParagraphBlock, result: { text: string; spans: any[] } | undefined, inkOn: boolean) {
+  const out: any = { ...block, translated: result?.text || '', spans: inkOn ? result?.spans || [] : [] };
+  if (!inkOn) { delete out.ink; delete out.runs; delete out.underline; }
+  delete out.eraseBottom;
+  return out;
 }
 
 /// 一段话的每一行分别送去翻译，翻译器看不到上下文，"Plan usage limits" 会被当成
@@ -652,6 +678,7 @@ function mergeParts(parts: TextBlock[]): TextBlock {
     x, y, width: right - x, height: Math.min(bottom - y, cap),
     weight: lineWeight(parts),
     gapBefore: parts[0].gapBefore,
+    ...mergeInk(parts),
   };
 }
 
@@ -730,6 +757,7 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
       lineHeight: medianHeight(group),
       lineCount: group.length,
       weight: lineWeight(group),
+      ...mergeInk(group),
     };
   });
 }
@@ -962,6 +990,7 @@ function refineWithAccessibility(
         y: bestMatch.y,
         width: bestMatch.width,
         height: bestMatch.height,
+        eraseBottom: undefined,
       };
     }
     return ocr;
@@ -1027,13 +1056,7 @@ async function handleRegionTranslate() {
     }
 
     // OCR returns physical pixels; convert to CSS pixels relative to region
-    const cssBlocks = ocrBlocks.map(b => ({
-      ...b,
-      x: b.x / scaleFactor,
-      y: b.y / scaleFactor,
-      width: b.width / scaleFactor,
-      height: b.height / scaleFactor,
-    }));
+    const cssBlocks = ocrBlocks.map(b => toCss(b, scaleFactor));
 
     const targetLang = config.targetLanguage || 'zh-CN';
     const blocksToTranslate = filterForeignBlocks(cssBlocks, targetLang);
@@ -1045,22 +1068,25 @@ async function handleRegionTranslate() {
 
     showLoading(t('translatingPct', { n: 70 }));
     const paragraphs = groupIntoParagraphs(dropDuplicateBoxes(dropLowConfidenceOverlaps(dropUndersizedBoxes(dropOversizedBoxes(blocksToTranslate)))), selection.width);
-    const texts = paragraphs.map(b => b.text);
-    const translations = await translate(texts, targetLang, config);
+    const inkOn = inkSupported(config.provider);
+    const results = await translateWithInk(paragraphs, targetLang, config, inkOn);
+    const translations = results.map(r => r.text);
 
     // 没翻出来的段落（接口失败、返回空）一个都别画：照原文画上去就是"英文盖英文"，
     // 字号还不一定对；擦掉又只剩一片空白。干脆原样留着，看着是没翻，至少不是坏的。
     const failed = paragraphs.filter((_, i) => !translations[i]);
     if (failed.length) debugLog(`有 ${failed.length} 段没翻出来，保持原文不动`);
     const translatedBlocks = paragraphs
-      .map((block, i) => ({ ...block, translated: translations[i] || '' }))
+      .map((block, i) => withTranslation(block, results[i], inkOn))
       .filter(b => b.translated);
 
     hideLoading();
     showRegionOverlay({
       screenshotPath,
       blocks: translatedBlocks,
-      eraseRects: cssBlocks,
+      eraseRects: cssBlocks
+        .filter(r => !failed.some(f => rectOverlapRatio(f, r) > 0.5))
+        .map(eraseRectOf),
       regionX: selection.x,
       regionY: selection.y,
       regionWidth: selection.width,

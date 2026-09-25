@@ -34,6 +34,7 @@ async function translateBatch(
 - Return ONLY a JSON array of the same length
 - Keep proper nouns, brand names, URLs, numbers unchanged
 - Tokens like XQZ0, XQZ1 are placeholders for product names: copy them exactly, do not translate, drop or reorder their text
+- Tags like <c1>...</c1> mark highlighted words (links, colored text): keep every tag pair exactly once, around the translation of the words it wraps; never drop, add or renumber tags
 - Translate naturally for UI context
 - No explanation, no markdown, just the JSON array
 

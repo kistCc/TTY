@@ -5,6 +5,8 @@ import { translateWithDeepL } from './providers/deepl';
 import { translateWithOllama } from './providers/ollama';
 import { translateWithGoogle } from './providers/google';
 import { translateWithYoudao } from './providers/youdao';
+import { InkRun, InkSpan, MarkerStyle, wrapRuns, unwrapRuns } from './ink';
+import { debugLog } from './native';
 
 /// 产品名被硬翻出来最难看：Claude 成了"克劳德"、Claude Code 成了"克劳德代码"。
 /// 整块文本就是一个产品名时直接原样留着，连请求都不用发。
@@ -91,6 +93,49 @@ export async function translate(
   });
 
   return texts.map(text => resultOf.get(text) ?? text);
+}
+
+/// 各家翻译服务用哪种颜色标记。
+/// 实测（8 句带色段的英文 → 中文）：Google 用 XML 标签 12/12 原样带回、位置都对，
+/// 字母数字标记虽然也回来了，但会把句子翻怪（"单击此处的 QXA1 QXB1"）。
+const MARKER_STYLE: Record<string, MarkerStyle> = {
+  openai: 'xml', claude: 'xml', ollama: 'xml', deepl: 'xml',
+  google: 'xml', youdao: 'alnum',
+};
+
+/// 保持颜色要靠翻译服务把标记原样带回来。实测带不回来的服务在这里关掉，
+/// 那时浮层按以前的办法画黑白字（按底色深浅选黑或白），不会只画一半颜色。
+/// 有道：两种标记都试过，丢标记、挪位置，还会连累译文本身（"Archer-SQ" 被吞掉、
+/// 仓库名被硬翻成"屏幕翻译器"），所以有道不开颜色。
+const INK_UNSUPPORTED = new Set<string>(['youdao']);
+
+export function inkSupported(provider: string): boolean {
+  return !!MARKER_STYLE[provider] && !INK_UNSUPPORTED.has(provider);
+}
+
+/// 带颜色的翻译：段落里和主色不同的色段先用标记包起来再送去翻译，
+/// 回来按标记找出色段在译文里的位置。标记丢了的色段不上色，译文本身不受影响。
+export async function translateWithInk(
+  items: { text: string; runs?: InkRun[] }[],
+  targetLang: string,
+  config: Config,
+  inkOn: boolean
+): Promise<{ text: string; spans: InkSpan[] }[]> {
+  const style = MARKER_STYLE[config.provider];
+  if (!inkOn || !style) {
+    const out = await translate(items.map(i => i.text), targetLang, config);
+    return out.map(text => ({ text, spans: [] }));
+  }
+  const wrapped = items.map(i => wrapRuns(i.text, i.runs, style));
+  const out = await translate(wrapped.map(w => w.text), targetLang, config);
+  return out.map((translated, i) => {
+    if (!translated) return { text: '', spans: [] };
+    const { text, spans, kept } = unwrapRuns(translated, wrapped[i].marks, style);
+    if (kept < wrapped[i].marks.length) {
+      debugLog(`  颜色标记 ${wrapped[i].marks.length} 个只回来 ${kept} 个：${translated}`);
+    }
+    return { text, spans };
+  });
 }
 
 async function translateUnique(

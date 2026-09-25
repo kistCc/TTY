@@ -42,8 +42,14 @@ export async function translateWithDeepL(
     texts, BATCH_SIZE, MAX_CONCURRENCY,
     async (batch) => {
       const params = new URLSearchParams();
-      batch.forEach(t => params.append('text', t));
+      // 带颜色标记（<c1>…</c1>）的请求要开 XML 模式，DeepL 才会原样保留标签；
+      // XML 模式下正文里的 & < > 得先转义，只留我们自己的标签
+      const tagged = batch.some(t => /<\/?c\d+>/.test(t));
+      const escape = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/&lt;(\/?c\d+)&gt;/g, '<$1>');
+      batch.forEach(t => params.append('text', tagged ? escape(t) : t));
       params.append('target_lang', deeplLang);
+      if (tagged) params.append('tag_handling', 'xml');
       const data = await request(`${baseUrl}/v2/translate`, {
         method: 'POST',
         headers: {
@@ -53,7 +59,8 @@ export async function translateWithDeepL(
         body: params.toString(),
       });
       if (data.translations && Array.isArray(data.translations)) {
-        return data.translations.map((t: { text: string }) => t.text);
+        const unescape = (t: string) => t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        return data.translations.map((t: { text: string }) => (tagged ? unescape(t.text) : t.text));
       }
       throw new Error('Unexpected DeepL response');
     },

@@ -8,9 +8,17 @@ const ERASE_PAD = 2;
 /// 段落译文的行距：字号的多少倍
 const PARAGRAPH_LINE_GAP = 1.28;
 
+/// 按住空格看原文用：干净的原图、画好译文的那一版
+let originalCanvas = null;
+let translatedCanvas = null;
+let showingOriginal = false;
+
 window.api.onShowTranslation((data) => {
   const { screenshotPath, blocks } = data;
   stickerBlocks = blocks || [];
+  originalCanvas = null;
+  translatedCanvas = null;
+  showingOriginal = false;
 
   const img = new Image();
   img.onload = () => {
@@ -100,7 +108,7 @@ window.api.onShowTranslation((data) => {
         // 整段译文要在原来那块地方里排得下：先按框宽折行，放不下就缩字号再试
         fontSize = fitParagraph(ctx, block.translated, w, h, weight, fontFamily, originalFontSize, minFontSize);
         ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
-        wrapped = wrapText(ctx, block.translated, w);
+        wrapped = wrapLines(ctx, block.translated, w);
       } else {
         ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
         while (fontSize > minFontSize && ctx.measureText(block.translated).width > w) {
@@ -116,10 +124,16 @@ window.api.onShowTranslation((data) => {
       ctx.fillRect(x - ERASE_PAD, y - ERASE_PAD, w + ERASE_PAD * 2, h + ERASE_PAD * 2);
 
       // Draw translated text
-      const textColor = bgColor.brightness > 128
+      // 字色跟原文走：原文是什么颜色就画什么颜色，链接之类的色段单独上色。
+      // 量出来的颜色和底色太接近（量错了、或者本来就是很淡的字）时，退回按底色深浅选黑白。
+      const fallbackColor = bgColor.brightness > 128
         ? (bgColor.brightness > 200 ? '#1a1a1a' : '#000000')
         : (bgColor.brightness < 50 ? '#e0e0e0' : '#ffffff');
-      ctx.fillStyle = textColor;
+      const baseColor = block.ink && contrastRatio(block.ink, bgColor) >= 2.2 ? rgbCss(block.ink) : fallbackColor;
+      const spans = (block.spans || [])
+        .filter(sp => contrastRatio(sp.ink, bgColor) >= 1.8)
+        .map(sp => ({ start: sp.start, end: sp.end, color: rgbCss(sp.ink), underline: !!sp.underline }));
+      const style = { base: baseColor, baseUnderline: !!block.underline, spans, fontSize };
       ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
 
       if (isParagraph) {
@@ -129,15 +143,21 @@ window.api.onShowTranslation((data) => {
         // 段落整体在原框里垂直居中，行数变少时不会挤在顶上
         let ty = y + Math.max(0, Math.round((h - totalH) / 2));
         for (const line of wrapped) {
-          ctx.fillText(line, x, ty, w);
+          drawColoredLine(ctx, line.text, line.start, x, ty, w, style);
           ty += lineGap;
         }
       } else {
         ctx.textBaseline = 'middle';
         // Use row-shared center Y so same-row blocks render text at the same vertical position
-        ctx.fillText(block.translated, x, rowCenter, w);
+        drawColoredLine(ctx, block.translated, 0, x, rowCenter, w, style);
       }
     });
+
+    originalCanvas = clean;
+    translatedCanvas = document.createElement('canvas');
+    translatedCanvas.width = canvas.width;
+    translatedCanvas.height = canvas.height;
+    translatedCanvas.getContext('2d').drawImage(canvas, 0, 0);
   };
 
   img.src = data.screenshotDataUrl || `file://${screenshotPath}`;
@@ -243,29 +263,134 @@ document.addEventListener('keydown', (e) => {
 
 window.api.onClear(() => {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  originalCanvas = null;
+  translatedCanvas = null;
+  showingOriginal = false;
 });
+
+// ---------------------------------------------------------------------------
+// 按住空格看原文，松开回到译文。浮层要先点一下拿到焦点（和 ⌘C 一样）。
+// ---------------------------------------------------------------------------
+
+function showOriginal(on) {
+  if (!originalCanvas || !translatedCanvas || on === showingOriginal) return;
+  showingOriginal = on;
+  ctx.drawImage(on ? originalCanvas : translatedCanvas, 0, 0);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || e.metaKey || e.ctrlKey || e.altKey) return;
+  e.preventDefault();
+  if (!e.repeat) showOriginal(true);
+});
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') showOriginal(false);
+});
+// 按着空格切走了（⌘Tab、点了别的窗口），收不到松开，回来时别一直停在原文
+window.addEventListener('blur', () => showOriginal(false));
 
 
 /// 按框宽折行。中日韩逐字可断，拉丁词按空格断；一个词比整行还长时硬断。
-function wrapText(ctx, text, maxWidth) {
+/// 每行记下它在原文里从第几个字开始，上色时按这个下标对到色段上。
+function wrapLines(ctx, text, maxWidth) {
+  text = String(text);
   const lines = [];
-  let current = '';
-  const tokens = String(text).match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]|[^\s\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]+|\s+/g) || [];
-  for (const token of tokens) {
-    if (/^\s+$/.test(token)) {
-      if (current) current += ' ';
-      continue;
+  const re = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]|[^\s\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]+|\s+/g;
+  let start = -1;   // 当前行第一个字的下标
+  let end = -1;     // 当前行最后一个非空白字符之后的下标
+  for (let m; (m = re.exec(text)); ) {
+    const token = m[0];
+    if (/^\s+$/.test(token)) continue;
+    if (start < 0) { start = m.index; end = m.index + token.length; continue; }
+    const candidate = text.slice(start, m.index + token.length);
+    if (ctx.measureText(candidate).width > maxWidth) {
+      lines.push({ text: text.slice(start, end), start });
+      start = m.index;
     }
-    const candidate = current + token;
-    if (current && ctx.measureText(candidate).width > maxWidth) {
-      lines.push(current.trimEnd());
-      current = token;
-    } else {
-      current = candidate;
-    }
+    end = m.index + token.length;
   }
-  if (current.trim()) lines.push(current.trimEnd());
-  return lines.length ? lines : [String(text)];
+  if (start >= 0) lines.push({ text: text.slice(start, end), start });
+  return lines.length ? lines : [{ text, start: 0 }];
+}
+
+function wrapText(ctx, text, maxWidth) {
+  return wrapLines(ctx, text, maxWidth).map(l => l.text);
+}
+
+function rgbCss(c) {
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+/// WCAG 对比度：1 是完全一样，21 是黑白
+function contrastRatio(c, bg) {
+  const lum = (r, g, b) => {
+    const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+  };
+  const a = lum(c[0], c[1], c[2]);
+  const b = lum(bg.r, bg.g, bg.b);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+/// 画一行字，按色段分成几截分别上色。lineStart 是这一行在整段译文里的起始下标。
+/// 一行太宽时整行横向压扁到 maxWidth（和 fillText 的 maxWidth 参数效果一样），
+/// 分截画时每截按同一个比例压，拼起来不会错位。
+function drawColoredLine(ctx, line, lineStart, x, y, maxWidth, style) {
+  const full = ctx.measureText(line).width;
+  const k = full > maxWidth && maxWidth > 0 ? maxWidth / full : 1;
+
+  // 按下标切成同色的几截
+  const segs = [];
+  let i = 0;
+  while (i < line.length) {
+    const at = lineStart + i;
+    const sp = style.spans.find(s => at >= s.start && at < s.end);
+    let j = i + 1;
+    while (j < line.length) {
+      const sp2 = style.spans.find(s => lineStart + j >= s.start && lineStart + j < s.end);
+      if (sp2 !== sp) break;
+      j++;
+    }
+    segs.push({
+      text: line.slice(i, j),
+      color: sp ? sp.color : style.base,
+      underline: sp ? sp.underline : style.baseUnderline,
+    });
+    i = j;
+  }
+
+  // 下划线的位置：从当前的对齐方式推出字的基线，线画在基线下面一点
+  const baseline = ctx.textBaseline;
+  ctx.textBaseline = 'alphabetic';
+  const m = ctx.measureText('M');
+  ctx.textBaseline = baseline;
+  const asc = m.fontBoundingBoxAscent || style.fontSize * 0.8;
+  const desc = m.fontBoundingBoxDescent || style.fontSize * 0.2;
+  const baseY = baseline === 'top' ? y + asc : baseline === 'middle' ? y + (asc - desc) / 2 : y;
+  const thick = Math.max(1, Math.round(style.fontSize / 15));
+  const underY = Math.round(baseY + Math.max(1, style.fontSize * 0.1));
+
+  let cx = x;
+  for (const seg of segs) {
+    const segW = ctx.measureText(seg.text).width * k;
+    ctx.fillStyle = seg.color;
+    if (k < 1) {
+      ctx.save();
+      ctx.translate(cx, y);
+      ctx.scale(k, 1);
+      ctx.fillText(seg.text, 0, 0);
+      ctx.restore();
+    } else {
+      ctx.fillText(seg.text, cx, y);
+    }
+    if (seg.underline && seg.text.trim()) {
+      // 线只划在字上，不划两头的空格
+      const lead = ctx.measureText(seg.text.slice(0, seg.text.length - seg.text.trimStart().length)).width * k;
+      const body = ctx.measureText(seg.text.trim()).width * k;
+      ctx.fillRect(Math.round(cx + lead), underY, Math.round(body), thick);
+    }
+    cx += segW;
+  }
 }
 
 /// 找一个能把整段塞进原框的字号：先按原字号试，排不下就一点点缩，缩到下限为止。

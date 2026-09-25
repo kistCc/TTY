@@ -29,7 +29,7 @@ async function translateBatch(
   const model = config.model || 'qwen2.5';
 
   const numbered = texts.map((t, i) => `${i + 1}. ${t}`).join('\n');
-  const prompt = `Translate the following texts to ${targetLang}. Return ONLY a JSON array of translated strings in the same order, no explanation. Keep proper nouns, brand names, URLs and numbers unchanged. Tokens like XQZ0, XQZ1 are placeholders for product names: copy them exactly.\n\n${numbered}`;
+  const prompt = `Translate the following texts to ${targetLang}. Return ONLY a JSON array of translated strings in the same order, no explanation. Keep proper nouns, brand names, URLs and numbers unchanged. Tokens like XQZ0, XQZ1 are placeholders for product names: copy them exactly. Tags like <c1>...</c1> mark highlighted words: keep every tag pair exactly once, around the translation of the words it wraps.\n\n${numbered}`;
 
   const data = await request(`${baseUrl}/api/chat`, {
     method: 'POST',

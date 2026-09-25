@@ -10,14 +10,18 @@ import * as fs from 'fs';
 
 export type NativeTool = 'ocr-macos' | 'hotkey-macos' | 'axtext-macos';
 
-/// 排查用：GUI 应用的 console.log 看不见，把关键节点写到 ~/Developer/TTY/tty-debug.log。
+/// 排查日志放在哪：和项目的其它东西（源码、备份、安装包）放在同一个文件夹里
+function debugDir(): string {
+  return path.join(require('os').homedir(), 'Claude', 'TTY', '其他');
+}
+
+/// 排查用：GUI 应用的 console.log 看不见，把关键节点写到 ~/Claude/TTY/其他/tty-debug.log。
 ///
 /// 默认什么都不做——只有那个文件已经存在时才往里追加。要排查时先
-/// `touch ~/Developer/TTY/tty-debug.log`，不排查就删掉它，不会平白在仓库里堆东西。
+/// `touch ~/Claude/TTY/其他/tty-debug.log`，不排查就删掉它。
 export function debugLog(msg: string) {
   try {
-    const os = require('os');
-    const logPath = path.join(os.homedir(), 'Developer', 'TTY', 'tty-debug.log');
+    const logPath = path.join(debugDir(), 'tty-debug.log');
     if (!fs.existsSync(logPath)) return;
     fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}\n`);
   } catch {}
@@ -25,11 +29,10 @@ export function debugLog(msg: string) {
 
 /// 版面问题（段落被拆开、译文互相压着）光看最后的段落列表看不出原因，
 /// 得看 OCR 原始框和聚出来的行。这一路输出很长，所以单独一个开关：
-/// `touch ~/Developer/TTY/tty-debug-ocr.log` 打开，删掉就关。
+/// `touch ~/Claude/TTY/其他/tty-debug-ocr.log` 打开，删掉就关。
 export function debugLogVerbose(msg: string) {
   try {
-    const os = require('os');
-    if (!fs.existsSync(path.join(os.homedir(), 'Developer', 'TTY', 'tty-debug-ocr.log'))) return;
+    if (!fs.existsSync(path.join(debugDir(), 'tty-debug-ocr.log'))) return;
     debugLog(msg);
   } catch {}
 }

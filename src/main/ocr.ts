@@ -1,7 +1,8 @@
 import { execFile } from 'child_process';
 import { ensureNative, debugLogVerbose } from './native';
+import { InkInfo, InkToken, RGB, summarizeTokens } from './ink';
 
-export interface TextBlock {
+export interface TextBlock extends InkInfo {
   text: string;
   confidence: number;
   x: number;
@@ -13,6 +14,18 @@ export interface TextBlock {
   /// 原生程序在像素上确认过：它和左边那块之间是一大段空白（两个并排按钮、表格的两格），
   /// 不是漏认了字。聚行、并段都不许把它和左边接起来。
   gapBefore?: boolean;
+  /// 原文下面有下划线伸出框外时，擦原文要擦到这里（和 y 同一套坐标）
+  eraseBottom?: number;
+}
+
+/// 原生程序吐出来的一块：在 TextBlock 之外还带着每个词的量色结果
+interface RawBlock extends TextBlock { tokens?: InkToken[] }
+
+/// 每个词的颜色整理成整块的主色 + 色段，原始的词列表不再往下传
+function withInk(raw: RawBlock): TextBlock {
+  const { tokens, ...block } = raw;
+  const info = summarizeTokens(block.text, tokens, block.bg as RGB | undefined);
+  return { ...block, ...info };
 }
 
 export interface WindowRect { x: number; y: number; width: number; height: number; }
@@ -72,7 +85,7 @@ export function performOCR(imagePath: string): Promise<TextBlock[]> {
       }
       if (stderr) debugLogVerbose(`OCR 分片: ${stderr.toString().trim().replace(/\n/g, ' | ')}`);
       try {
-        resolve(dedupeStripeOverlap(JSON.parse(stdout.trim()) as TextBlock[]));
+        resolve(dedupeStripeOverlap((JSON.parse(stdout.trim()) as RawBlock[]).map(withInk)));
       } catch {
         reject(new Error('OCR 输出解析失败'));
       }
