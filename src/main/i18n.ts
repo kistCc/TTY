@@ -15,7 +15,7 @@ const EN = {
 
   trayTranslate: 'Translate',
   traySelectionTranslate: 'Translate Selection',
-  trayClipboardTranslate: 'Translate Clipboard',
+  trayInputTranslate: 'Type to Translate',
   trayHide: 'Hide',
   trayClearCache: 'Clear Cache',
   traySettings: 'Settings',
@@ -59,7 +59,7 @@ const ZH: Record<Key, string> = {
 
   trayTranslate: '翻译屏幕',
   traySelectionTranslate: '划词翻译',
-  trayClipboardTranslate: '复制翻译',
+  trayInputTranslate: '输入翻译',
   trayHide: '关闭浮层',
   trayClearCache: '清空缓存',
   traySettings: '设置…',

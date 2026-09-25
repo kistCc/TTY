@@ -10,7 +10,7 @@ let onTranslateCallback: (() => void) | null = null;
 let onHideCallback: (() => void) | null = null;
 let onClearCacheCallback: (() => void) | null = null;
 let onSelectionTranslateCallback: (() => void) | null = null;
-let onClipboardTranslateCallback: (() => void) | null = null;
+let onInputTranslateCallback: (() => void) | null = null;
 let isOverlayVisibleFn: (() => boolean) | null = null;
 
 export function setTranslateCallback(cb: () => void) {
@@ -29,8 +29,8 @@ export function setSelectionTranslateCallback(cb: () => void) {
   onSelectionTranslateCallback = cb;
 }
 
-export function setClipboardTranslateCallback(cb: () => void) {
-  onClipboardTranslateCallback = cb;
+export function setInputTranslateCallback(cb: () => void) {
+  onInputTranslateCallback = cb;
 }
 
 export function setOverlayVisibleFn(fn: () => boolean) {
@@ -55,7 +55,7 @@ export function createTray() {
   ipcMain.handle('save-config', (_event, config) => {
     const result = saveConfig(config);
     if (config.uiLanguage) { resetUILanguage(); updateTrayMenu(); }
-    if (config.hotkey || config.dismissKey || config.cacheKey || config.regionKey || config.textKey || config.clipKey) {
+    if (config.hotkey || config.dismissKey || config.cacheKey || config.regionKey || config.textKey || config.inputKey) {
       const { restartWithHotkeys } = require('./hotkey');
       restartWithHotkeys({
         trigger: result.hotkey,
@@ -63,7 +63,7 @@ export function createTray() {
         cache: result.cacheKey,
         region: result.regionKey,
         text: result.textKey,
-        clip: result.clipKey,
+        input: result.inputKey,
       });
     }
     if (Object.prototype.hasOwnProperty.call(config, 'openAtLogin')) {
@@ -104,9 +104,9 @@ export function updateTrayMenu() {
       click: () => { if (onSelectionTranslateCallback) onSelectionTranslateCallback(); },
     },
     {
-      label: t('trayClipboardTranslate'),
+      label: t('trayInputTranslate'),
       icon: emptyIcon,
-      click: () => { if (onClipboardTranslateCallback) onClipboardTranslateCallback(); },
+      click: () => { if (onInputTranslateCallback) onInputTranslateCallback(); },
     },
     {
       label: t('trayHide'),

@@ -18,8 +18,8 @@ export interface Config {
   regionKey: string;
   /// 划词翻译：翻译此刻选中的文本（需要辅助功能权限）。
   textKey: string;
-  /// 复制翻译：翻译剪贴板里的文本（不需要任何权限）。
-  clipKey: string;
+  /// 输入翻译：弹出输入框，打字、回车翻译。
+  inputKey: string;
   /// 贴图上复制整张贴图（贴图要先点一下拿到焦点）。
   copyImageKey: string;
   /// 贴图上复制译文；划词/复制翻译的小窗里也是这个键。
@@ -56,7 +56,7 @@ const DEFAULT_CONFIG: Config = {
   cacheKey: 'shift+s',
   regionKey: 'alt+cmd+r',
   textKey: 'alt+d',
-  clipKey: 'alt+c',
+  inputKey: 'alt+c',
   copyImageKey: 'cmd+c',
   copyTextKey: 'shift+cmd+c',
   peekKey: 'space',
@@ -115,6 +115,9 @@ export function getConfig(): Config {
     if (fs.existsSync(configPath)) {
       const raw = fs.readFileSync(configPath, 'utf-8');
       const userConfig = JSON.parse(raw);
+      // 「复制翻译」改成了「输入翻译」，沿用原来设的那个键
+      if (userConfig.inputKey === undefined && typeof userConfig.clipKey === 'string') userConfig.inputKey = userConfig.clipKey;
+      delete userConfig.clipKey;
       return { ...DEFAULT_CONFIG, ...userConfig };
     }
   } catch {}

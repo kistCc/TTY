@@ -15,9 +15,10 @@ import { debugLog, debugLogVerbose } from './native';
 import { joinParts as joinLines } from './text-join';
 import { t, readableError } from './i18n';
 import { ensureOverlayWindow, showOverlay, hideOverlay, isOverlayVisible, showLoading, hideLoading, showCancelled, setDismissCallback, discardCurrentScreenshot } from './overlay';
-import { createTray, openSettings, setTranslateCallback, setHideCallback, setClearCacheCallback, setSelectionTranslateCallback, setClipboardTranslateCallback, setOverlayVisibleFn, updateTrayMenu } from './tray';
-import { startHotkeyMonitor, stopHotkeyMonitor, restartWithHotkeys, sendHotkeyState, setHotkeyPermissionDeniedHandler, setHotkeyRegisterFailedHandler, setTextCallback, setClipCallback, getHotkeyBackend } from './hotkey';
-import { showSelectionTranslate, showClipboardTranslate, hideQuick } from './quick';
+import { createTray, openSettings, setTranslateCallback, setHideCallback, setClearCacheCallback, setSelectionTranslateCallback, setInputTranslateCallback, setOverlayVisibleFn, updateTrayMenu } from './tray';
+import { startHotkeyMonitor, stopHotkeyMonitor, restartWithHotkeys, sendHotkeyState, setHotkeyPermissionDeniedHandler, setHotkeyRegisterFailedHandler, setTextCallback, setInputCallback, getHotkeyBackend } from './hotkey';
+import { showSelectionTranslate, hideQuick } from './quick';
+import { showInputTranslate, hideInput } from './input';
 import { showSelection, cancelSelection, isSelectionActive } from './selection';
 import { showRegionOverlay, closeAllRegionOverlays } from './region-overlay';
 import * as fs from 'fs';
@@ -148,9 +149,9 @@ app.whenReady().then(() => {
   });
   setOverlayVisibleFn(isOverlayVisible);
   setTextCallback(() => { showSelectionTranslate(); });
-  setClipCallback(() => { showClipboardTranslate(); });
+  setInputCallback(() => { showInputTranslate(); });
   setSelectionTranslateCallback(() => { showSelectionTranslate(); });
-  setClipboardTranslateCallback(() => { showClipboardTranslate(); });
+  setInputTranslateCallback(() => { showInputTranslate(); });
   setClearCacheCallback(() => {
     translationCache.clear();
     console.log('[cache] Cleared by user');
@@ -246,7 +247,7 @@ app.whenReady().then(() => {
       cache: getConfig().cacheKey,
       region: getConfig().regionKey,
       text: getConfig().textKey,
-      clip: getConfig().clipKey,
+      input: getConfig().inputKey,
     }
   );
 
@@ -287,6 +288,7 @@ async function handleTranslate() {
 
     // Screenshot — hide any UI first so it doesn't get captured
     hideQuick();
+    hideInput();
     hideLoading();
     // 等浮层真正从屏幕上消失再截屏。100ms 够一帧合成，再长就是白等。
     await new Promise(r => setTimeout(r, 100));

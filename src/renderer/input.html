@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>TTY</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { background: transparent; }
+    body {
+      padding: 12px;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+      overflow: hidden;
+    }
+    #card {
+      position: relative;
+      /* 不透明：半透明时后面窗口的字会透上来，和输入的字混在一起 */
+      background: rgb(30, 30, 46);
+      border: 1px solid #45475a;
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    /* 拿到键盘焦点时（能打字）边缘亮一圈淡紫色，和贴图一样 */
+    #card::after {
+      content: ''; position: absolute; inset: 0; border-radius: 12px; pointer-events: none;
+      box-shadow: inset 0 0 0 1.5px rgba(203, 166, 247, 0.9), inset 0 0 8px rgba(203, 166, 247, 0.35);
+      opacity: 0; transition: opacity 0.12s ease;
+    }
+    #card.focus::after { opacity: 1; }
+    #bar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid #313244;
+      -webkit-app-region: drag;
+    }
+    #dot { width: 7px; height: 7px; border-radius: 50%; background: #cba6f7; flex: none; }
+    #route { font-size: 11px; color: #6c7086; letter-spacing: .2px; }
+    #spacer { flex: 1; }
+    #close {
+      -webkit-app-region: no-drag;
+      font-size: 15px; line-height: 1; color: #6c7086;
+      cursor: pointer; padding: 2px 4px; border-radius: 4px;
+    }
+    #close:hover { color: #f38ba8; background: #313244; }
+
+    #text {
+      display: block;
+      margin: 10px 12px 0;
+      width: calc(100% - 24px);
+      min-height: 62px;
+      max-height: 160px;
+      padding: 9px 11px;
+      background: #181825;
+      border: 1px solid #313244;
+      border-radius: 8px;
+      outline: none;
+      resize: none;
+      font: inherit;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #cdd6f4;
+      caret-color: #cba6f7;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    #text::placeholder { color: #585b70; }
+    #hint {
+      display: flex; justify-content: space-between;
+      padding: 6px 14px 10px;
+      font-size: 10.5px; color: #585b70;
+    }
+    #result {
+      display: none;
+      padding: 11px 14px 12px;
+      font-size: 15px;
+      line-height: 1.55;
+      color: #cdd6f4;
+      max-height: 300px;
+      overflow-y: auto;
+      border-top: 1px solid #313244;
+      -webkit-user-select: text;
+      user-select: text;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+    #result.show { display: block; }
+    #result.pending { color: #6c7086; font-size: 13px; }
+    #result.error { color: #f38ba8; font-size: 13px; }
+
+    #foot {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 12px;
+      border-top: 1px solid #313244;
+    }
+    #copy {
+      -webkit-app-region: no-drag;
+      padding: 4px 12px;
+      background: #cba6f7; color: #1e1e2e;
+      border: none; border-radius: 5px;
+      font-size: 11px; font-weight: 600;
+      cursor: pointer;
+    }
+    #copy:hover { background: #b4befe; }
+    #copy:disabled { background: #45475a; color: #6c7086; cursor: default; }
+    #tip { font-size: 10px; color: #585b70; margin-left: auto; }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-thumb { background: #45475a; border-radius: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    .dots::after { content: ''; animation: dots 1.2s steps(4, end) infinite; }
+    @keyframes dots {
+      0% { content: ''; } 25% { content: '·'; }
+      50% { content: '··'; } 75% { content: '···'; }
+    }
+  </style>
+</head>
+<body>
+  <div id="card">
+    <div id="bar">
+      <span id="dot"></span>
+      <span id="route"></span>
+      <span id="spacer"></span>
+      <span id="close">×</span>
+    </div>
+    <textarea id="text" rows="2" spellcheck="false"></textarea>
+    <div id="hint"><span id="hintKeys"></span><span id="hintAuto"></span></div>
+    <div id="result"></div>
+    <div id="foot">
+      <button id="copy" disabled></button>
+      <span id="tip"></span>
+    </div>
+  </div>
+  <script src="keys.js"></script>
+  <script src="input.js"></script>
+</body>
+</html>

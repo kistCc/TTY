@@ -11,16 +11,16 @@ const axopenEl = document.getElementById('axopen');
 const I18N = {
   zh: {
     translating: '翻译中', copy: '复制译文', copied: '已复制',
-    emptySelection: '没有选中文本', emptyClipboard: '剪贴板是空的',
+    emptySelection: '没有选中文本',
     tip: '关闭', failed: '翻译失败：',
-    fromClipboard: '剪贴板', fromSelection: '划词',
+    fromSelection: '划词',
     axHint: '划词取词被系统挡住了，需要在「隐私与安全性」里给 TTY 授权', axOpen: '去开启',
   },
   en: {
     translating: 'Translating', copy: 'Copy', copied: 'Copied',
-    emptySelection: 'Nothing selected', emptyClipboard: 'Clipboard is empty',
+    emptySelection: 'Nothing selected',
     tip: 'to close', failed: 'Failed: ',
-    fromClipboard: 'clipboard', fromSelection: 'selection',
+    fromSelection: 'selection',
     axHint: 'Selection capture is blocked — grant TTY permission in Privacy & Security', axOpen: 'Open Settings',
   },
 };
@@ -63,10 +63,10 @@ window.quick.onShow((data) => {
   }
 
   if (data.empty) {
-    routeEl.textContent = data.from === 'clipboard' ? s('fromClipboard') : s('fromSelection');
+    routeEl.textContent = s('fromSelection');
     sourceEl.style.display = 'none';
     resultEl.className = 'pending';
-    resultEl.textContent = s(data.from === 'clipboard' ? 'emptyClipboard' : 'emptySelection');
+    resultEl.textContent = s('emptySelection');
     setCopyState(false, 'copy');
     syncHeight();
     return;
@@ -75,11 +75,8 @@ window.quick.onShow((data) => {
   sourceEl.style.display = '';
   sourceEl.textContent = data.text;
   sourceEl.scrollTop = 0;
-  // 只在回落到剪贴板时标注来源——取到选区是常态，不必每次都说
-  // 两条通道各有快捷键，标一下这次翻的是哪来的文本
   const route = LANG_NAME[data.targetLang] || data.targetLang || '';
-  const src = data.from === 'clipboard' ? s('fromClipboard') : s('fromSelection');
-  routeEl.textContent = `${route} · ${src}`;
+  routeEl.textContent = `${route} · ${s('fromSelection')}`;
   resultEl.className = 'pending dots';
   resultEl.textContent = s('translating');
   setCopyState(false, 'copy');

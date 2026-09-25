@@ -5,13 +5,9 @@ import { translate } from './translator';
 import { getSelection } from './selection-text';
 import { isChineseUI, readableError } from './i18n';
 
-// 两条取词通道，各自一个快捷键，互不回落——按了哪个键就翻哪来的文本，
-// 不会出现"我明明选中了，翻的却是上次复制的东西"这种事：
-//
-//   划词翻译（showSelectionTranslate）：读辅助功能接口里的选区，需要辅助功能权限
-//   复制翻译（showClipboardTranslate）：读剪贴板，不需要任何权限
-//
-// 两条都和截图那条链路完全分开——不截屏、不做 OCR，一次请求就出结果。
+// 划词翻译（showSelectionTranslate）：读辅助功能接口里的选区（需要辅助功能权限），
+// 在鼠标旁的小窗里显示译文。和截图那条链路完全分开——不截屏、不做 OCR，一次请求就出结果。
+// 输入翻译在 input.ts。
 
 /// 卡片本身的宽度之外再留一圈，给 CSS 阴影用（系统阴影在透明窗上会露出直角）。
 const SHADOW_PAD = 12;
@@ -101,8 +97,8 @@ function ratioOf(text: string, re: RegExp): number {
 }
 
 /// 目标语言就是设置里的那个，除非文本本身已经是目标语言——那时候反过来译，
-/// 这样「复制一段中文查英文说法」也能用同一个快捷键。
-function pickTargetLang(text: string, configured: string): string {
+/// 这样「选中一段中文查英文说法」也能用同一个快捷键。输入翻译也用这套判断。
+export function pickTargetLang(text: string, configured: string): string {
   const prefix = configured.split('-')[0];
   const isCJKTarget = ['zh', 'ja', 'ko'].includes(prefix);
 
@@ -131,16 +127,9 @@ export async function showSelectionTranslate() {
   runQuick(text, 'selection', { needsAX: denied });
 }
 
-/// 复制翻译：只认剪贴板，跟选区和辅助功能权限都没关系。
-export function showClipboardTranslate() {
-  const text = (clipboard.readText() || '').trim();
-  console.log(`[quick] 剪贴板：${text.length} 字`);
-  runQuick(text, 'clipboard', {});
-}
-
 async function runQuick(
   text: string,
-  from: 'selection' | 'clipboard',
+  from: 'selection',
   opts: { needsAX?: boolean }
 ) {
   const win = ensureQuickWindow();

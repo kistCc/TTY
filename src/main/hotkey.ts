@@ -29,7 +29,7 @@ let saveCacheFn: (() => void) | null = null;
 let cancelFn: (() => void) | null = null;
 let regionFn: (() => void) | null = null;
 let textFn: (() => void) | null = null;
-let clipFn: (() => void) | null = null;
+let inputFn: (() => void) | null = null;
 let permissionDeniedFn: (() => void) | null = null;
 let registerFailedFn: ((accelerators: string[]) => void) | null = null;
 let currentArgs: string[] = [];
@@ -49,7 +49,7 @@ export interface Hotkeys {
   cache?: string;
   region?: string;
   text?: string;
-  clip?: string;
+  input?: string;
 }
 
 export interface HotkeyConfig {
@@ -78,9 +78,9 @@ export function setTextCallback(cb: () => void) {
   textFn = cb;
 }
 
-/// 复制翻译（翻译剪贴板里的文本）。同上，常驻注册。
-export function setClipCallback(cb: () => void) {
-  clipFn = cb;
+/// 输入翻译（弹出输入框）。同上，常驻注册。
+export function setInputCallback(cb: () => void) {
+  inputFn = cb;
 }
 
 export function getHotkeyBackend(): HotkeyBackend {
@@ -201,7 +201,7 @@ export const HOTKEY_DEFAULTS = {
   dismiss: 'escape',
   cache: 'shift+s',
   text: 'alt+d',
-  clip: 'alt+c',
+  input: 'alt+c',
 };
 
 /// Parse a configured hotkey, falling back to this slot's default when the value
@@ -232,7 +232,7 @@ function startBackend() {
   // 不看浮层状态，所以常驻注册就够，也不需要输入监控权限。
   const taken = [toAccelerator(trigger), toAccelerator(region)];
   registerTextHotkey('划词翻译', currentHotkeys.text, HOTKEY_DEFAULTS.text, taken, () => textFn?.());
-  registerTextHotkey('复制翻译', currentHotkeys.clip, HOTKEY_DEFAULTS.clip, taken, () => clipFn?.());
+  registerTextHotkey('输入翻译', currentHotkeys.input, HOTKEY_DEFAULTS.input, taken, () => inputFn?.());
 }
 
 function registerTextHotkey(
