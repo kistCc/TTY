@@ -8,7 +8,7 @@ export type RGB = [number, number, number];
 
 /// 原生程序给的一个词：[s, e) 是它在这块文字里的位置（UTF-16 下标），c 是字色，
 /// n 是量色用到的像素数（0 = 量不出来），u = 1 表示词下面有下划线
-export interface InkToken { s: number; e: number; c: RGB; n: number; u?: number }
+export interface InkToken { s: number; e: number; c: RGB; n: number; u?: number; x?: number; w?: number }
 
 /// 一段和主色不同的文字
 export interface InkRun { text: string; ink: RGB; underline?: boolean }
@@ -133,8 +133,9 @@ export function mergeInk(parts: ({ text: string } & InkInfo)[]): InkInfo {
     if (p.segs?.length) segs.push(...p.segs);
     else if (p.ink) segs.push({ text: p.text.trim(), ink: p.ink, underline: p.underline });
   }
-  if (!segs.length) return {};
   const bg = parts.find(p => p.bg)?.bg;
+  // 量不出字色的块也要把底色带下去：拼行、并段时靠底色区分按钮和旁边的正文
+  if (!segs.length) return bg ? { bg } : {};
   const groups: { ink: RGB; chars: number; underChars: number }[] = [];
   for (const r of segs) {
     let g = groups.find(g => sameInk(g.ink, r.ink, bg));

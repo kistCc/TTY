@@ -18,6 +18,7 @@ const KEEP_AS_IS = new Set([
   'macos', 'ios', 'ipados', 'windows', 'linux', 'android',
   'python', 'javascript', 'typescript', 'node.js', 'npm', 'json', 'html', 'css',
   'deepl', 'ollama', 'google', 'youdao', 'tty', 'wi-fi', 'wifi', 'bluetooth',
+  'macintosh hd', 'shell', 'api', 'sdk', 'cli', 'ip', 'ipv4', 'ipv6', 'url', 'dns', 'vpn', 'http', 'https', 'ssl', 'tls', 'csv', 'pdf', 'asn',
 ]);
 
 function keepAsIs(text: string): boolean {
@@ -33,6 +34,17 @@ function keepAsIs(text: string): boolean {
 const BRAND_PATTERNS = [
   /\bClaude Code\b/g, /\bClaude\b/g, /\bChatGPT\b/g, /\bAnthropic\b/g, /\bOpenAI\b/g,
   /\bGitHub\b/g, /\bmacOS\b/g, /\biOS\b/g, /\bTTY\b/g, /\bCowork\b/g,
+  // 技术缩写：有道会把 API 译成"应用程序编程接口"、句首单独的 IP 译成"知识产权"
+  /\b(?:APIs?|SDKs?|CLI|IPv[46]|IP|URLs?|DNS|VPNs?|HTTPS?|SSL|TLS|JSON|CSV|PDF|ASN|CPU|GPU|RAM|SSD|USB|OCR)\b/g,
+  // 大小写混写的专名：IPinfo、JavaScript、iPhone、YouTube
+  /\b(?:[A-Z]{2,}[a-z]{2,}\w*|[A-Z][a-z]+[A-Z][a-z]+\w*|[a-z][A-Z][a-z]{2,}\w*)\b/g,
+  // 句子里夹着的文件名："运行.command"、"README.md"
+  /[\p{L}\p{N}_-]+\.(?:command|sh|zsh|js|ts|py|swift|json|md|txt|log|dmg|zip|app|png|jpe?g|pdf|html?|css|docx?|xlsx?|pptx?)\b/gu,
+  // 句子里夹着的地址、网址、邮箱、IP
+  /\b(?:https?:\/\/|www\.)\S+[\w/]/g,
+  /\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b/g,
+  /\b\d{1,3}(?:\.\d{1,3}){3}\b/g,
+  /\b[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,7}\b/gi,
 ];
 
 /// 目标语言用的文字：外文句子里夹着这种字时要遮起来（见 maskTargetScript）

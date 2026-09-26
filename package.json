@@ -1,6 +1,6 @@
 {
   "name": "screen-translator",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Screenshot, OCR, translate, and overlay — seamless screen translation tool",
   "main": "dist/main/index.js",
   "scripts": {
@@ -9,7 +9,7 @@
     "dev": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "build:native": "clang -O2 -fobjc-arc scripts/ocr-macos.m -o scripts/ocr-macos -framework Foundation -framework Vision -framework AppKit && clang -O2 -fobjc-arc scripts/hotkey-macos.m -o scripts/hotkey-macos -framework Foundation -framework Carbon -framework AppKit && clang -O2 -fobjc-arc scripts/axtext-macos.m -o scripts/axtext-macos -framework Foundation -framework AppKit -framework ApplicationServices"
+    "build:native": "clang -O2 -fobjc-arc scripts/ocr-macos.m -o scripts/ocr-macos -framework Foundation -framework Vision -framework AppKit && clang -O2 -fobjc-arc scripts/hotkey-macos.m -o scripts/hotkey-macos -framework Foundation -framework Carbon -framework AppKit && clang -O2 -fobjc-arc scripts/axtext-macos.m -o scripts/axtext-macos -framework Foundation -framework AppKit -framework ApplicationServices && swiftc -O -parse-as-library -target arm64-apple-macos13.0 scripts/layout-macos.swift -o scripts/layout-macos"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -75,6 +75,10 @@
       {
         "from": "scripts/axtext-macos.m",
         "to": "scripts/axtext-macos.m"
+      },
+      {
+        "from": "scripts/layout-macos",
+        "to": "scripts/layout-macos"
       }
     ],
     "asar": true,

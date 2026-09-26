@@ -22,6 +22,8 @@ export interface OverlayData {
   blocks: OverlayBlock[];
   /// 并段之前的原始文本块，用来把原文擦干净（碎块不并段也不能留着英文）
   eraseRects?: Array<{ x: number; y: number; width: number; height: number }>;
+  /// 不擦的原文框：擦除往外扩时碰到它们就停
+  keepRects?: Array<{ x: number; y: number; width: number; height: number }>;
   displayBounds?: { x: number; y: number; width: number; height: number };
 }
 

@@ -7,7 +7,7 @@
 <p align="center"><strong>贴图翻译 · macOS 屏幕翻译工具 · 全屏翻译 · 选区翻译 · 像素级原位覆盖</strong></p>
 
 <p align="center">
-  <a href="https://github.com/kistCc/TTY/releases/latest"><img src="https://img.shields.io/badge/Release-v1.4.1-blue?style=flat" alt="Release"></a>
+  <a href="https://github.com/kistCc/TTY/releases/latest"><img src="https://img.shields.io/badge/Release-v1.5.0-blue?style=flat" alt="Release"></a>
   <a href="https://github.com/kistCc/TTY/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey?style=flat" alt="macOS">
   <img src="https://img.shields.io/badge/Electron-33-47848f?style=flat" alt="Electron">
@@ -26,7 +26,7 @@
 上游作者 **[@Archer-SQ](https://github.com/Archer-SQ)**，原项目以 MIT 许可证发布。
 截图、OCR、翻译、像素级原位覆盖这套核心设计全部来自上游，在此致谢。
 
-本仓库基于上游 v1.2.3，当前版本 v1.4.1。主要改动：
+本仓库基于上游 v1.2.3，当前版本 v1.5.0。主要改动：
 
 | 改动 | 说明 |
 |---|---|
@@ -39,12 +39,12 @@
 | **输入翻译** | `⌥C` 在鼠标旁弹出输入框，直接打字，回车翻译（⇧回车换行）；默认中文翻成英文、外文翻成目标语言，也可以在顶上的「翻成」下拉里固定选一种语言（选过就记住）；用输入法打字时候选框不会被输入框挡住。取代了原来的「复制翻译」 |
 | **贴图复制** | 翻译浮层上 `⌘C` 复制整张贴图、`⇧⌘C` 复制译文（都可在设置里改）；点击浮层即获得键盘焦点 |
 | **启动不打扰** | 只驻留菜单栏，仅首次安装弹一次设置窗；可设为开机自启 |
-| **全屏翻译提速** | 翻译批次并发、翻译前按文本去重、OCR 切图改用 JPEG |
+| **全屏翻译提速** | 翻译批次并发、翻译前按文本去重 |
 | **有道翻译** | 新增一档免费翻译服务，不需要 API Key；一屏的文本块合并成一次请求发出、按行拆回，行数对不上时自动退回逐条翻译 |
 | **整段翻译整段覆盖** | 全屏翻译不再一行一译一贴：识别出的文本块先按垂直中心聚成行、再按行距/左边缘/字号并成段，整段一次送去翻译、整段折行贴回，句子不会再从中间断开 |
-| **盖得住原文** | 并段前的原始文本框一律先按背景色擦掉，译文比原文短也不会露出半截英文；字号跟着原文走，但限制在整屏行高的 0.6～1.8 倍之间，不会出现巨型字或蚂蚁字 |
+| **盖得住原文** | 要画译文的原文框先擦掉，译文比原文短也不会露出半截英文；字号跟着原文走，下限是整屏行高的 0.6 倍，不会出现蚂蚁字 |
 | **挡掉 OCR 的坏块** | 跨行糊在一起的复合框、半个字高的残框、压在正常块上的低置信度框，翻出来必是乱码，识别阶段就丢掉 |
-| **深色页面不再整片漏字** | 去掉了 OCR 前的「对比度+锐化」预处理——它会让深色背景的页面整片认不出字；整屏按横条分片识别，改在原生程序里用 Vision 的 `regionOfInterest` 完成 |
+| **深色页面不再整片漏字** | 去掉了 OCR 前的「对比度+锐化」预处理——它会让深色背景的页面整片认不出字；整屏分块识别在原生程序里用 Vision 的 `regionOfInterest` 完成 |
 | **按排版常识分段** | 上一行明明放得下下一个词却换行 = 段落结束；列表记号开头另起一条；段间距按这一页自己的单倍行距判断；字重不同（粗体标题/标签）不并段。设置页、FAQ、列表、书信不再并成一大团 |
 | **不同窗口的字不串** | 截图那一刻记下各窗口位置，不同窗口里的字永远不会被接成一句 |
 | **区域翻译与全屏一致** | 区域截图翻译改用全屏同一套渲染（按段折行、字号跟原文、不再横向压扁）；并排的按钮按像素空白分开，不再连成一句 |
@@ -53,6 +53,10 @@
 | **选中提示 + 自动选中** | 贴图拿到键盘焦点时边缘亮一圈淡紫色细框，点到别处就淡出；翻译出来默认自动选中贴图，不用先点一下就能按关闭、复制、看原文（设置里「翻译后自动选中贴图」可关）。贴图关掉、框选结束后，键盘焦点自动还给原来的软件 |
 | **Google 夹中文也能翻** | 英文句子里夹着中文时，Google 会把整句判成中文、原样返回。现在先把夹着的中文词换成占位符，翻完再原样换回 |
 | **只认设置的快捷键** | 关闭浮层、区域贴图、划词小窗，取消框选、取消翻译，一律只认设置里的「关闭浮层」键，修饰键必须完全一致；去掉了双击关闭和写死的 ⎋；全屏翻译键、选区翻译键不再兼当关闭键。复制贴图、复制译文、看原文也改成可在设置里改的快捷键 |
+| **识别更准（1.5.0）** | 全屏截图先切成几块互相重叠的格子找字，再把找到的每一片文字（一段正文、一个按钮、一排菜单）从原图裁出来放大重认——和框选一小块翻译是同样的精度，小字、按钮上的字、中英混排都认得更准；看起来像代码的一片关掉语言纠错。macOS 26 起再用 Vision 的文档识别看哪些行是同一段，折成两行的大标题会整句翻译 |
+| **全屏和区域走同一条流程** | 全屏翻译不再用「辅助功能」读到的文字替换识别结果（网页一个元素常常连着旁边按钮的字，弹窗会被拼乱），和区域翻译用完全相同的识别、拼段、绘制 |
+| **不该翻的不翻不擦** | 代码、命令、JSON、IP/IPv6 地址、AS 号、网址、邮箱、版本号、文件名、logo 原样保留；只擦会画上译文的原文，已经是中文、纯数字的字一个像素都不动。句子里夹着的 API、IP、URL 和 IPinfo 这类专名翻译时保持原样 |
+| **擦得干净、字号对** | 擦除范围按真实墨迹外扩；纯色底直接填色，渐变和花纹底按四周颜色插值、只换笔画像素，不再擦出方块；译文字号按原文推算（大写/无下伸的英文框高只有约 0.72 个字号），大标题不再变小；底色不同的按钮不和旁边的字拼成一句；标点不放在行首 |
 | **六家翻译服务统一** | 有道 / Google / DeepL / OpenAI / Claude / Ollama 统一分批、条数对不上逐条重翻、失败保留原文、产品名不丢；报错显示成一句人话，不再是乱码 |
 
 完整改动见 commit 历史；第一个 commit 是上游 v1.2.3 的原始状态，可直接 diff。
@@ -99,7 +103,7 @@
 - **常驻置顶** — 可覆盖全屏应用
 
 ### OCR & 翻译
-- **整屏识别 + 版面重建** — 整屏一次 OCR，再按行距/左边缘/字号把文本块还原成段落，整段翻译整段覆盖
+- **分块识别 + 版面重建** — 整屏分格子找字、按区域放大重认，再按行距/左边缘/字号/底色（macOS 26 起加上文档识别）把文本块还原成段落，整段翻译整段覆盖
 - **Vision Revision 3** — 使用 macOS 最新 OCR 模型
 - **多引擎** — Google（免费）/ 有道（免费）/ OpenAI / Anthropic / DeepL / Ollama
 - **翻译缓存** — `Shift+S` 手动保存，相同内容秒显
@@ -151,11 +155,13 @@ npm install
 npm run dev
 ```
 
-本仓库只提交源码，`scripts/` 下的三个原生工具（OCR / 热键 / 辅助功能取词）是
-Objective-C 源码，`npm run build` 会先用 clang 编译它们，再编译 TypeScript：
+本仓库只提交源码，`scripts/` 下的原生工具（OCR / 热键 / 辅助功能取词是 Objective-C，
+段落识别 layout-macos 是 Swift），`npm run build` 会先用 clang 和 swiftc 编译它们，再编译 TypeScript。
+需要 Xcode 或命令行工具（`xcode-select --install`），SDK 要 macOS 26 或更新（段落识别用到的接口在 26 才有；
+编出来的程序在 13～25 上也能装，只是不做段落识别）：
 
 ```bash
-npm run build:native   # 只编译 scripts/*.m
+npm run build:native   # 只编译 scripts/ 下的原生工具
 npm run build          # 原生工具 + TypeScript
 ```
 
@@ -170,7 +176,7 @@ npm run dist
 
 ### 系统要求
 
-- macOS 13.0+（Apple Silicon）
+- macOS 13.0+（Apple Silicon）；macOS 26+ 额外启用文档识别辅助分段（第一次启动时系统会在后台准备模型，可能要几十秒）
 - **屏幕录制** 权限（截图）
 - **辅助功能** 权限（划词翻译、UI 元素定位）
 
@@ -205,10 +211,10 @@ npm run dist
 ## 工作原理
 
 ```
-快捷键 → 截屏 → OCR + AX 并行识别 → 过滤坏块 → 聚行并段 → 分批翻译 → Canvas 擦除原文并绘制译文
+快捷键 → 截屏 → 分块找字 + 按区域放大重认（同时跑文档识别）→ 过滤坏块和不该翻的 → 聚行并段 → 分批翻译 → Canvas 擦除原文并绘制译文
 ```
 
-**全屏翻译**：截整屏 → 整屏 OCR → 剔除坏块 → 聚行并段 → 整段翻译 → 覆盖层擦除原文并折行绘制
+**全屏翻译**：截整屏 → 分块识别 → 剔除坏块 → 聚行并段 → 整段翻译 → 覆盖层擦除原文并折行绘制
 
 **选区翻译**：先冻结整屏截图 → 弹出半透明选框 → 用户拖拽 → 裁剪截图 → OCR → 翻译 → 可拖拽可缩放的独立结果窗口
 
@@ -216,7 +222,7 @@ npm run dist
 - macOS Vision framework OCR（zh-Hans / zh-Hant / ja / ko / en 等）
 - 原生 CGEventTap 全局热键监听
 - Canvas 直接绘制（自动字号反推、背景色采样、译文覆盖）
-- Accessibility API 精确定位（配合 OCR 提升坐标精度）
+- Vision 文档识别（macOS 26+）辅助判断段落
 
 ## 项目结构
 
@@ -224,9 +230,10 @@ npm run dist
 src/main/                主进程（TypeScript）
   index.ts               翻译流程编排
   screenshot.ts          区域截图（screencapture -R）
-  ocr.ts                 调用 OCR 二进制（整屏识别）
+  pipeline.ts            一张截图从识别到可绘制数据（全屏、区域共用）
+  layout.ts              版面重建：过滤、聚行、并段，判断代码/标识/logo
+  ocr.ts                 调用 OCR 和文档识别两个原生程序
   ink.ts                 字色：定主色、挑出色段、翻译标记的包裹与还原
-  accessibility.ts       AX API 包装
   translator.ts          翻译服务调度（含文本去重）
   batch.ts               批次切分与并发调度
   providers/             google | youdao | openai | claude | deepl | ollama
@@ -248,8 +255,9 @@ src/renderer/            渲染层（纯 HTML/JS）
   selection.html/js      选区框选 UI
   settings.html/js       设置页面（中英双语）
 
-scripts/                 原生 macOS 工具（Objective-C）
-  ocr-macos.m            Vision OCR + 按词量字色、认下划线
+scripts/                 原生 macOS 工具（Objective-C / Swift）
+  ocr-macos.m            Vision OCR：分块找字、按区域放大重认，按词量字色、认下划线
+  layout-macos.swift     Vision 文档识别（macOS 26+），给拼段当提示
   hotkey-macos.m         CGEventTap 全局热键
   axtext-macos.m         Accessibility 文字读取
 ```
@@ -270,4 +278,4 @@ MIT
 |---|---|
 | [@kistCc](https://github.com/kistCc) | 本分支维护 |
 | [@Archer-SQ](https://github.com/Archer-SQ) | 上游 [screen-translator](https://github.com/Archer-SQ/screen-translator) 作者 |
-| [Claude](https://claude.com/claude-code)（Anthropic） | v1.3.x 的有道翻译接入、全屏整段翻译重构、图标与文档，v1.4.0 的保持原文颜色，由 Claude 结对完成 |
+| [Claude](https://claude.com/claude-code)（Anthropic） | v1.3.x 的有道翻译接入、全屏整段翻译重构、图标与文档，v1.4.0 的保持原文颜色，v1.5.0 的识别与绘制改造，由 Claude 结对完成 |

@@ -10,6 +10,8 @@ export interface RegionOverlayData {
   blocks: Array<{ text: string; translated: string; x: number; y: number; width: number; height: number }>;
   /// 并段之前的原始块：渲染时先按它们把原文全擦掉，再画译文
   eraseRects?: Array<{ x: number; y: number; width: number; height: number }>;
+  /// 不擦的原文框：擦除往外扩时碰到它们就停
+  keepRects?: Array<{ x: number; y: number; width: number; height: number }>;
   regionX: number;      // global screen coords
   regionY: number;
   regionWidth: number;  // CSS pixels
@@ -126,6 +128,7 @@ export function showRegionOverlay(data: RegionOverlayData) {
     win.webContents.send('show-translation', {
       blocks: data.blocks,
       eraseRects: data.eraseRects,
+      keepRects: data.keepRects,
       screenshotDataUrl,
       regionWidth: data.regionWidth,
       regionHeight: data.regionHeight,

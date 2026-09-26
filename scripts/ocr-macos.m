@@ -153,7 +153,9 @@ static long underlineRow(const uint8_t *rgba, size_t W, size_t H, long x0, long 
 /// 一块字里每个词的颜色（和下划线）。词的位置用 Vision 自己给的 boundingBoxForRange，
 /// 一行里夹着的蓝色链接就是靠这个认出来的。
 /// Vision 有时给不出词级位置（每个词都回整行的框），这时整块不输出词，只剩整块的字色。
-static NSArray *tokenColors(VNRecognizedText *candidate, CGRect obsBox, CGRect roi, double imgW, double imgH, double scale,
+/// 坐标换算：Vision 给的是"请求那张图"里 roi 内的归一化坐标（原点左下）；这张图是原图里
+/// 以 (ox, oy) 为左上角、fw×fh 大小的一块按比例放大来的，所以换回原图像素只要这几个数。
+static NSArray *tokenColors(VNRecognizedText *candidate, CGRect obsBox, CGRect roi, double ox, double oy, double fw, double fh,
                             const uint8_t *rgba, size_t W, size_t H, RGB bg, long *eraseBottom) {
     NSString *s = candidate.string;
     // 按空格切：Vision 自己也是按空格认词的，"Archer-SQ/screen-translator" 这种拆成
@@ -187,8 +189,8 @@ static NSArray *tokenColors(VNRecognizedText *candidate, CGRect obsBox, CGRect r
                                 b.size.height * roi.size.height);
         // Vision 给不出词级位置时每个词都回整行的框：整块不输出词
         if (range.length < s.length * 0.6 && box.size.width > obsBox.size.width * 0.9) return @[];
-        long x = lround(box.origin.x * imgW / scale), w = lround(box.size.width * imgW / scale);
-        long y = lround((1.0 - box.origin.y - box.size.height) * imgH / scale), h = lround(box.size.height * imgH / scale);
+        long x = lround(ox + box.origin.x * fw), w = lround(box.size.width * fw);
+        long y = lround(oy + (1.0 - box.origin.y - box.size.height) * fh), h = lround(box.size.height * fh);
         [boxes addObject:[NSValue valueWithRect:NSMakeRect(x, y, w, h)]];
         long n = 0;
         // 词框左右各收 1 像素，别把隔壁词的笔画算进来
@@ -196,7 +198,8 @@ static NSArray *tokenColors(VNRecognizedText *candidate, CGRect obsBox, CGRect r
         RGB ink = inkColor(rgba, W, H, x + 1, y, x + w - 1, y + h, bg, &n);
         // 这个词底下的底色跟整块的不一样（徽章、按钮拼在一起的块），量出来的颜色没意义
         if (rgbDist(tbg, bg) > 60) n = 0;
-        NSMutableDictionary *t = [@{ @"s": @(range.location), @"e": @(range.location + range.length),
+        // x、w 是这个词在原图上的横向位置：一行里词和词隔得特别开（一排菜单被认成一行）时，调用方按它拆开
+        NSMutableDictionary *t = [@{ @"s": @(range.location), @"e": @(range.location + range.length), @"x": @(x), @"w": @(w),
                                      @"c": @[@(ink.r), @(ink.g), @(ink.b)], @"n": @(n) } mutableCopy];
         if (n > 0) {
             long thick = 0;
@@ -249,17 +252,19 @@ static long longestBlankRun(const uint8_t *gray, size_t W, size_t H, long x0, lo
     return best;
 }
 
-/// 在图的某个区域（归一化坐标，原点左下）里认字。每次都新建 handler。
-static NSArray *recognize(CGImageRef img, CGRect roi, NSError **error) {
+static NSArray<NSString *> *kLanguages;
+
+/// 在一张图的某个区域（归一化坐标，原点左下）里认字。每次都新建 request 和 handler，可以并发调用。
+/// code=YES 时是代码、命令、JSON：关掉语言纠错（不然 is_tor 会被"纠正"成单词）、只按英文认。
+static NSArray *recognize(CGImageRef img, CGRect roi, BOOL code, NSError **error) {
     VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
     request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
     if (@available(macOS 13, *)) {
         request.revision = VNRecognizeTextRequestRevision3;
-        request.automaticallyDetectsLanguage = YES;
+        request.automaticallyDetectsLanguage = !code;
     }
-    request.recognitionLanguages = @[@"zh-Hans", @"zh-Hant", @"ja", @"ko",
-                                      @"en", @"fr", @"de", @"es", @"pt", @"it"];
-    request.usesLanguageCorrection = YES;
+    request.recognitionLanguages = code ? @[@"en-US"] : kLanguages;
+    request.usesLanguageCorrection = !code;
     request.minimumTextHeight = 0.0;
     request.regionOfInterest = roi;
     VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:img options:@{}];
@@ -267,21 +272,104 @@ static NSArray *recognize(CGImageRef img, CGRect roi, NSError **error) {
     return request.results ?: @[];
 }
 
+/// 原图里的一块（像素，左上角为原点）按 k 倍放大成一张新图
+static CGImageRef scaledCrop(CGImageRef src, CGRect crop, double k) {
+    CGImageRef part = CGImageCreateWithImageInRect(src, crop);
+    if (!part) return NULL;
+    size_t w = (size_t)lround(crop.size.width * k), h = (size_t)lround(crop.size.height * k);
+    CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef ctx = CGBitmapContextCreate(NULL, w, h, 8, 0, srgb, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(srgb);
+    if (!ctx) { CGImageRelease(part); return NULL; }
+    CGContextSetInterpolationQuality(ctx, kCGInterpolationHigh);
+    CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), part);
+    CGImageRef out = CGBitmapContextCreateImage(ctx);
+    CGContextRelease(ctx);
+    CGImageRelease(part);
+    return out;
+}
+
+/// 一条识别结果：Vision 的候选文字 + 它在原图上的位置 + 坐标换算要用的几个数（见 tokenColors）
+@interface Hit : NSObject
+@property (strong) VNRecognizedText *cand;
+@property CGRect box;      // 请求图里的归一化坐标（已换算出 roi）
+@property CGRect roi;
+@property double ox, oy, fw, fh;
+@property CGRect px;       // 原图像素，左上角为原点
+@end
+@implementation Hit
+@end
+
+static NSArray<Hit *> *hitsFrom(NSArray *obsList, CGRect roi, double ox, double oy, double fw, double fh) {
+    NSMutableArray *out = [NSMutableArray array];
+    for (VNRecognizedTextObservation *obs in obsList) {
+        VNRecognizedText *cand = [[obs topCandidates:1] firstObject];
+        if (!cand || cand.confidence < 0.2) continue;
+        CGRect b = obs.boundingBox;
+        Hit *h = [Hit new];
+        h.cand = cand; h.roi = roi; h.ox = ox; h.oy = oy; h.fw = fw; h.fh = fh;
+        h.box = CGRectMake(roi.origin.x + b.origin.x * roi.size.width, roi.origin.y + b.origin.y * roi.size.height,
+                           b.size.width * roi.size.width, b.size.height * roi.size.height);
+        h.px = CGRectMake(ox + h.box.origin.x * fw, oy + (1.0 - h.box.origin.y - h.box.size.height) * fh,
+                          h.box.size.width * fw, h.box.size.height * fh);
+        [out addObject:h];
+    }
+    return out;
+}
+
+static double medianOf(NSMutableArray<NSNumber *> *xs) {
+    if (!xs.count) return 0;
+    [xs sortUsingSelector:@selector(compare:)];
+    return xs[xs.count / 2].doubleValue;
+}
+
+/// 看起来像代码、命令、JSON 的一行
+static BOOL looksLikeCode(NSString *s) {
+    static NSRegularExpression *re;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        re = [NSRegularExpression regularExpressionWithPattern:
+              @"^\\s*([\"'“”][\\w .$-]+[\"'“”]\\s*:|[A-Za-z_][\\w.]*\\s*:\\s*[\\[{]|[{}\\[\\]]\\s*,?\\s*$|[$%>❯]\\s|(git|npm|npx|curl|brew|pip3?|python3?|cd|sudo|docker)\\s)"
+                                                    options:0 error:nil];
+    });
+    return [re numberOfMatchesInString:s options:0 range:NSMakeRange(0, s.length)] > 0;
+}
+
+/// 这一片里的字全都已经是目标语言（中文界面上的一片中文），或者根本没有字母
+static BOOL skipAsTarget(NSArray<Hit *> *members, NSString *target) {
+    NSString *pattern = [target hasPrefix:@"zh"] ? @"[\\u4e00-\\u9fff]"
+        : [target hasPrefix:@"ja"] ? @"[\\u3040-\\u30ff\\u4e00-\\u9fff]"
+        : [target hasPrefix:@"ko"] ? @"[\\uac00-\\ud7af]" : nil;
+    if (!pattern) return NO;
+    NSRegularExpression *own = [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:nil];
+    NSRegularExpression *latin = [NSRegularExpression regularExpressionWithPattern:@"[A-Za-z]" options:0 error:nil];
+    for (Hit *h in members) {
+        NSString *t = h.cand.string;
+        NSUInteger o = [own numberOfMatchesInString:t options:0 range:NSMakeRange(0, t.length)];
+        NSUInteger l = [latin numberOfMatchesInString:t options:0 range:NSMakeRange(0, t.length)];
+        if (l >= 2 && o * 10 < (o + l) * 4) return NO;  // 有一块以外文为主，要重认
+    }
+    return YES;
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         if (argc < 2) { fprintf(stderr, "Usage: ocr-macos <image-path>\n"); return 1; }
         if (strcmp(argv[1], "--windows") == 0) return listWindows(argc > 2 ? atoi(argv[2]) : 0);
+        kLanguages = @[@"zh-Hans", @"zh-Hant", @"ja", @"ko", @"en", @"fr", @"de", @"es", @"pt", @"it"];
 
         NSString *imagePath = [NSString stringWithUTF8String:argv[1]];
+        // 可选的第二个参数：目标语言（zh / ja / ko）。第二遍重认时跳过已经是这种文字的片——反正不翻
+        NSString *target = argc > 2 ? [NSString stringWithUTF8String:argv[2]] : @"";
         NSImage *image = [[NSImage alloc] initWithContentsOfFile:imagePath];
         if (!image) { fprintf(stderr, "Failed to load image\n"); return 1; }
-
         CGImageRef cgImage = [image CGImageForProposedRect:nil context:nil hints:nil];
         if (!cgImage) { fprintf(stderr, "Failed to get CGImage\n"); return 1; }
 
         size_t origW = CGImageGetWidth(cgImage);
         size_t origH = CGImageGetHeight(cgImage);
-        // 原图的灰度，给 strokeWeight 量笔画用（不用增强过的那张：锐化会把笔画描粗）
+        NSDate *t0 = [NSDate date];
+        // 原图的灰度，给 strokeWeight 量笔画用
         uint8_t *gray = calloc(origW * origH, 1);
         CGColorSpaceRef graySpace = CGColorSpaceCreateDeviceGray();
         CGContextRef grayCtx = CGBitmapContextCreate(gray, origW, origH, 8, origW, graySpace, (CGBitmapInfo)kCGImageAlphaNone);
@@ -289,97 +377,177 @@ int main(int argc, const char *argv[]) {
         CGColorSpaceRelease(graySpace);
         uint8_t *rgba = loadRGBA(cgImage, origW, origH);
 
-        // 2x upscale for better small text detection
-        CGFloat scale = 2.0;
-        size_t newW = (size_t)(origW * scale);
-        size_t newH = (size_t)(origH * scale);
-        CGColorSpaceRef cs = CGImageGetColorSpace(cgImage);
-        CGContextRef ctx = CGBitmapContextCreate(NULL, newW, newH, 8, 0, cs,
-            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+        // ── 第一遍：找字在哪 ─────────────────────────────────────────────
+        // 切成几块互相重叠的格子分别认。Vision 会把送进去的图缩到固定尺寸再找字，
+        // 整屏一次送进去，小字被缩得太小就漏了；格子越小，字在它眼里越大。
+        // 这一遍只管找到字的位置，认准交给第二遍，所以不放大原图（放大一倍要多花一倍时间）。
+        // 小图（区域翻译框的一小块）不切、不做第二遍，放大 2 倍认一次就好。
+        const BOOL doRefine = origW * origH >= 1500000;
+        CGImageRef big = doRefine ? NULL : scaledCrop(cgImage, CGRectMake(0, 0, origW, origH), 2.0);
+        CGImageRef pass1Image = big ?: cgImage;
+        // 格子大小：一台 14 寸屏（3000×2000 左右）切成 2×2
+        const int cols = doRefine ? MAX(1, (int)ceil(origW / 1800.0)) : 1;
+        const int rows = doRefine ? MAX(1, (int)ceil(origH / 1100.0)) : 1;
+        const CGFloat ovx = cols > 1 ? 0.06 : 0, ovy = rows > 1 ? 0.08 : 0;
+        const int tiles = cols * rows;
+        NSMutableArray *tileHits = [NSMutableArray array];
+        for (int i = 0; i < tiles; i++) [tileHits addObject:@[]];
+        __block NSError *fatal = nil;
+        dispatch_apply(tiles, DISPATCH_APPLY_AUTO, ^(size_t i) {
+            int r = (int)i / cols, c = (int)i % cols;
+            CGFloat left = MAX(0, (CGFloat)c / cols - ovx), right = MIN(1, (CGFloat)(c + 1) / cols + ovx);
+            CGFloat top = MAX(0, (CGFloat)r / rows - ovy), bottom = MIN(1, (CGFloat)(r + 1) / rows + ovy);
+            CGRect roi = CGRectMake(left, 1.0 - bottom, right - left, bottom - top);
+            NSError *err = nil;
+            NSArray *obs = recognize(pass1Image, roi, NO, &err);
+            // 偶尔一整块返回 0 个框（原因不明），换没放大的原图再认一次
+            if (!err && obs.count == 0 && pass1Image != cgImage) obs = recognize(cgImage, roi, NO, &err);
+            @synchronized (tileHits) {
+                if (err) fatal = err;
+                tileHits[i] = hitsFrom(obs, roi, 0, 0, origW, origH);
+            }
+        });
+        if (big) CGImageRelease(big);
+        if (fatal) {
+            free(gray); free(rgba);
+            fprintf(stderr, "OCR failed: %s\n", fatal.localizedDescription.UTF8String);
+            return 1;
+        }
+        NSMutableArray<Hit *> *pass1 = [NSMutableArray array];
+        for (NSArray *a in tileHits) [pass1 addObjectsFromArray:a];
+        double t1 = -[t0 timeIntervalSinceNow];
 
-        CGImageRef scaledImage = cgImage;
-        if (ctx) {
-            CGContextSetInterpolationQuality(ctx, kCGInterpolationHigh);
-            CGContextDrawImage(ctx, CGRectMake(0, 0, newW, newH), cgImage);
-            CGImageRef scaled = CGBitmapContextCreateImage(ctx);
-            CGContextRelease(ctx);
-            if (scaled) scaledImage = scaled; else scale = 1.0;
-        } else { scale = 1.0; }
-
-        // 以前这里还有"对比度 1.3 + 去色 + 锐化"一步（给暗色终端用的）。实测深色背景的页面上，
-        // 这一步会让 Vision 在某一整片区域里一个字都认不出（每次都一样，不是偶发），
-        // 浅色背景上又几乎没有收益（字数差 0.5%），所以删掉，只保留放大。
-        CGImageRef ocrImage = scaledImage;
-
-        CGFloat imgW = CGImageGetWidth(ocrImage);
-        CGFloat imgH = CGImageGetHeight(ocrImage);
-
-        // 高屏按横条分片识别：Vision 会把整张图缩到固定输入尺寸再找字，图越高，
-        // 每行字被缩得越小，密排长页面会整片漏字。横着切只切在行与行之间，
-        // 不会把一行撕成两半；片间留一点重叠，骑缝的行两片都能认到，调用方按内容去重。
-        // 用 regionOfInterest 而不是先裁成小图：Vision 自己按像素裁，不经过别的图像库，
-        // 也不用落临时文件。
-        const int stripes = origH >= 1200 ? 3 : 1;
-        const CGFloat overlap = 0.06;
-        CGFloat band = 1.0 / stripes;
-        CGFloat pad = stripes > 1 ? band * overlap : 0;
+        // ── 第二遍：按区域放大重认 ───────────────────────────────────────
+        // 第一遍找到的字按远近聚成一片一片（一段正文、一个按钮、一排菜单），每片连同一点边距
+        // 从原图里裁出来、放大后单独再认一遍——和区域翻译框一小块是同样的效果。
+        // 小图（区域翻译）本来就是这个效果，不用再来一遍。
+        NSMutableArray<Hit *> *finalHits = [NSMutableArray array];
+        int regionCount = 0, refined = 0;
+        if (!doRefine) {
+            [finalHits addObjectsFromArray:pass1];
+        } else {
+            NSUInteger n = pass1.count;
+            NSMutableArray<NSNumber *> *parent = [NSMutableArray arrayWithCapacity:n];
+            for (NSUInteger i = 0; i < n; i++) [parent addObject:@(i)];
+            NSUInteger (^find)(NSUInteger) = ^NSUInteger(NSUInteger i) {
+                while (parent[i].unsignedIntegerValue != i) i = parent[i].unsignedIntegerValue;
+                return i;
+            };
+            for (NSUInteger i = 0; i < n; i++) {
+                CGRect a = pass1[i].px;
+                // 挨得近的并成一片一起裁：片数少，第二遍就快（每片都是一次 Vision 调用）
+                CGRect da = CGRectInset(a, -a.size.height * 1.5, -a.size.height * 1.2);
+                for (NSUInteger j = i + 1; j < n; j++) {
+                    CGRect b = pass1[j].px;
+                    // 两块字高差太多（标题和正文）也接得上：区域只是裁图的范围，不决定分段
+                    if (CGRectIntersectsRect(da, CGRectInset(b, -b.size.height * 0.2, -b.size.height * 0.2))) {
+                        NSUInteger ra = find(i), rb = find(j);
+                        if (ra != rb) parent[ra] = @(rb);
+                    }
+                }
+            }
+            NSMutableDictionary<NSNumber *, NSMutableArray<Hit *> *> *clusters = [NSMutableDictionary dictionary];
+            for (NSUInteger i = 0; i < n; i++) {
+                NSNumber *k = @(find(i));
+                if (!clusters[k]) clusters[k] = [NSMutableArray array];
+                [clusters[k] addObject:pass1[i]];
+            }
+            // 太高的一片（一整栏正文）按行与行之间的空当切成几段，每段不超过约 800 像素高
+            NSMutableArray<NSArray<Hit *> *> *regions = [NSMutableArray array];
+            for (NSMutableArray<Hit *> *members in clusters.allValues) {
+                [members sortUsingComparator:^NSComparisonResult(Hit *a, Hit *b) {
+                    return a.px.origin.y < b.px.origin.y ? NSOrderedAscending : a.px.origin.y > b.px.origin.y ? NSOrderedDescending : NSOrderedSame;
+                }];
+                NSMutableArray *chunk = [NSMutableArray array];
+                double chunkTop = 0, chunkBottom = 0;
+                for (Hit *h in members) {
+                    double top = CGRectGetMinY(h.px), bottom = CGRectGetMaxY(h.px);
+                    if (chunk.count && top >= chunkBottom && bottom - chunkTop > 800) {
+                        [regions addObject:chunk];
+                        chunk = [NSMutableArray array];
+                    }
+                    if (!chunk.count) { chunkTop = top; chunkBottom = bottom; }
+                    chunkBottom = MAX(chunkBottom, bottom);
+                    [chunk addObject:h];
+                }
+                if (chunk.count) [regions addObject:chunk];
+            }
+            regionCount = (int)regions.count;
+            NSMutableArray *regionHits = [NSMutableArray array];
+            for (NSUInteger i = 0; i < regions.count; i++) [regionHits addObject:[NSNull null]];
+            dispatch_apply(regions.count, DISPATCH_APPLY_AUTO, ^(size_t ri) {
+                NSArray<Hit *> *members = regions[ri];
+                CGRect core = CGRectNull;
+                NSMutableArray<NSNumber *> *hs = [NSMutableArray array];
+                NSUInteger codeLines = 0, chars = 0;
+                for (Hit *h in members) {
+                    core = CGRectUnion(core, h.px);
+                    [hs addObject:@(h.px.size.height)];
+                    if (looksLikeCode(h.cand.string)) codeLines++;
+                    chars += h.cand.string.length;
+                }
+                double medH = medianOf(hs);
+                // 不值得重认的片直接用第一遍的结果：整片都是目标语言的字（不翻）、
+                // 整片都没把握（照片、图标里的"字"）。大字也要重认：第一遍在格子重叠处会认出半截乱码
+                if (skipAsTarget(members, target)) return;
+                BOOL anySure = NO;
+                for (Hit *h in members) if (h.cand.confidence >= 0.4) { anySure = YES; break; }
+                if (!anySure) return;
+                double pad = MAX(8, medH * 0.6);
+                CGRect crop = CGRectIntegral(CGRectIntersection(CGRectInset(core, -pad, -pad), CGRectMake(0, 0, origW, origH)));
+                // 一片占了大半张图，裁出来也没比整张小多少，就用第一遍的结果
+                if (crop.size.width * crop.size.height > origW * origH * 0.6 || crop.size.width < 4 || crop.size.height < 4) return;
+                double k = medH < 28 ? 3.0 : 2.0;
+                if (crop.size.width * k > 6000) k = MAX(1.0, 6000 / crop.size.width);
+                if (crop.size.height * k > 6000) k = MAX(1.0, MIN(k, 6000 / crop.size.height));
+                BOOL code = codeLines * 10 >= members.count * 6;
+                CGImageRef img = scaledCrop(cgImage, crop, k);
+                if (!img) return;
+                NSError *err = nil;
+                NSArray *obs = recognize(img, CGRectMake(0, 0, 1, 1), code, &err);
+                CGImageRelease(img);
+                if (err || !obs.count) return;
+                // 只要中心落在这一片自己范围里的结果：边距里露出半截的邻居归邻居那一片
+                CGRect keep = CGRectInset(core, -medH * 0.3, -medH * 0.3);
+                NSMutableArray<Hit *> *kept = [NSMutableArray array];
+                NSUInteger keptChars = 0;
+                for (Hit *h in hitsFrom(obs, CGRectMake(0, 0, 1, 1), crop.origin.x, crop.origin.y, crop.size.width, crop.size.height)) {
+                    if (!CGRectContainsPoint(keep, CGPointMake(CGRectGetMidX(h.px), CGRectGetMidY(h.px)))) continue;
+                    [kept addObject:h];
+                    keptChars += h.cand.string.length;
+                }
+                // 重认的结果明显比第一遍少，多半是裁得不对，不采用。第一遍在格子重叠处会把同一行认两次，
+                // 字数本来就偏多，所以门槛放在三分之一
+                if (keptChars * 3 < chars) return;
+                @synchronized (regionHits) { regionHits[ri] = kept; }
+            });
+            for (NSUInteger i = 0; i < regions.count; i++) {
+                if (regionHits[i] != [NSNull null]) { [finalHits addObjectsFromArray:regionHits[i]]; refined++; }
+                else [finalHits addObjectsFromArray:regions[i]];
+            }
+        }
+        double t2 = -[t0 timeIntervalSinceNow];
+        fprintf(stderr, "格子 %dx%d 第一遍 %lu 块 %.2fs；区域 %d 片，重认 %d 片，%lu 块 %.2fs\n",
+                cols, rows, (unsigned long)pass1.count, t1, regionCount, refined, (unsigned long)finalHits.count, t2 - t1);
 
         NSMutableArray *results = [NSMutableArray array];
-        for (int i = 0; i < stripes; i++) {
-            // Vision 的归一化坐标原点在左下；第 0 片是屏幕最上面那一条
-            CGFloat top = MAX(0, i * band - pad);
-            CGFloat bottom = MIN(1, (i + 1) * band + pad);
-            CGRect roi = CGRectMake(0, 1.0 - bottom, 1, bottom - top);
-
-            NSError *error = nil;
-            NSArray *obsList = recognize(ocrImage, roi, &error);
-            // 偶尔会有一整片返回 0 个框（只在 App 里见过，单独跑复现不出来，原因不明）。
-            // 同一张图原样重认没用，换成没放大的原图、新 handler 再认一次；
-            // 真是空白区域的话这次也很快。
-            if (!error && obsList.count == 0 && ocrImage != cgImage) {
-                obsList = recognize(cgImage, roi, &error);
-                fprintf(stderr, "stripe %d/%d: 0, 原图重认 %lu\n", i + 1, stripes, (unsigned long)obsList.count);
-            } else {
-                fprintf(stderr, "stripe %d/%d: %lu\n", i + 1, stripes, (unsigned long)obsList.count);
-            }
-            if (error) {
-                free(gray); free(rgba);
-                if (ocrImage != cgImage) CGImageRelease(ocrImage);
-                fprintf(stderr, "OCR failed: %s\n", error.localizedDescription.UTF8String);
-                return 1;
-            }
-
-            for (VNRecognizedTextObservation *obs in obsList) {
-                VNRecognizedText *candidate = [[obs topCandidates:1] firstObject];
-                if (!candidate || candidate.confidence < 0.2) continue;
-
-                // boundingBox 是相对 regionOfInterest 的，换回整图的归一化坐标
-                CGRect b = obs.boundingBox;
-                CGRect box = CGRectMake(roi.origin.x + b.origin.x * roi.size.width,
-                                        roi.origin.y + b.origin.y * roi.size.height,
-                                        b.size.width * roi.size.width,
-                                        b.size.height * roi.size.height);
-                double x = box.origin.x * imgW / scale;
-                double y = (1.0 - box.origin.y - box.size.height) * imgH / scale;
-                double w = box.size.width * imgW / scale;
-                double h = box.size.height * imgH / scale;
-
-                RGB bg = edgeColor(rgba, origW, origH, lround(x), lround(y), lround(x + w), lround(y + h));
-                long eraseBottom = -1;
-                NSArray *tokens = tokenColors(candidate, box, roi, imgW, imgH, scale, rgba, origW, origH, bg, &eraseBottom);
-                NSMutableDictionary *item = [@{
-                    @"text": candidate.string,
-                    @"confidence": @(candidate.confidence),
-                    @"x": @(round(x)), @"y": @(round(y)),
-                    @"width": @(round(w)), @"height": @(round(h)),
-                    @"weight": @(strokeWeight(gray, origW, origH, x, y, w, h)),
-                    @"bg": @[@(bg.r), @(bg.g), @(bg.b)],
-                    @"tokens": tokens
-                } mutableCopy];
-                // 下划线在框下面时，擦原文要擦到下划线为止，不然译文下面留着一条旧线
-                if (eraseBottom > y + h) item[@"eraseBottom"] = @(eraseBottom);
-                [results addObject:item];
-            }
+        for (Hit *hit in finalHits) {
+            double x = hit.px.origin.x, y = hit.px.origin.y, w = hit.px.size.width, h = hit.px.size.height;
+            RGB bg = edgeColor(rgba, origW, origH, lround(x), lround(y), lround(x + w), lround(y + h));
+            long eraseBottom = -1;
+            NSArray *tokens = tokenColors(hit.cand, hit.box, hit.roi, hit.ox, hit.oy, hit.fw, hit.fh, rgba, origW, origH, bg, &eraseBottom);
+            NSMutableDictionary *item = [@{
+                @"text": hit.cand.string,
+                @"confidence": @(hit.cand.confidence),
+                @"x": @(round(x)), @"y": @(round(y)),
+                @"width": @(round(w)), @"height": @(round(h)),
+                @"weight": @(strokeWeight(gray, origW, origH, x, y, w, h)),
+                @"bg": @[@(bg.r), @(bg.g), @(bg.b)],
+                @"tokens": tokens
+            } mutableCopy];
+            // 下划线在框下面时，擦原文要擦到下划线为止，不然译文下面留着一条旧线
+            if (eraseBottom > y + h) item[@"eraseBottom"] = @(eraseBottom);
+            [results addObject:item];
         }
 
         // 同一行上相邻的两个框之间如果是一大段空白（超过一个字高），就标记右边那个：
@@ -404,7 +572,6 @@ int main(int argc, const char *argv[]) {
         }
         free(gray);
         free(rgba);
-        if (ocrImage != cgImage) CGImageRelease(ocrImage);
 
         NSData *jsonData = [NSJSONSerialization dataWithJSONObject:results options:0 error:nil];
         printf("%s\n", [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding].UTF8String);

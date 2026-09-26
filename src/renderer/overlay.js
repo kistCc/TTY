@@ -77,7 +77,7 @@ window.api.onShowTranslation((data) => {
     // 用整屏行高的中位数兜一个上限，异常的框会被压回正常字号。
     const sortedLineH = px.map(p => p.lineH).filter(h => h > 0).sort((a, b) => a - b);
     const medianLineH = sortedLineH.length ? sortedLineH[Math.floor(sortedLineH.length / 2)] : 0;
-    const maxLineH = medianLineH ? medianLineH * 1.8 : Infinity;
+    const maxLineH = medianLineH ? medianLineH * 5 : Infinity;
     // 同样也要兜一个下限。OCR 偶尔把一行只认出半个字高，照它定字号就是一行
     // 小得看不清的字挤在正文中间。字号仍然跟着原文走（标题还是比正文大），
     // 只是限制在整屏行高的一个合理区间里。
@@ -85,47 +85,41 @@ window.api.onShowTranslation((data) => {
     const sortedWeight = px.map(p => p.block.weight || 0).filter(w => w > 0).sort((a, b) => a - b);
     const medianWeight = sortedWeight.length ? sortedWeight[Math.floor(sortedWeight.length / 2)] : 0;
 
-    // 先按"并段之前的原始块"把原文统统擦掉。没并进任何段落的碎块不会画译文，
-    // 不擦的话它那块英文就留在屏幕上了。
+    // 先把要画译文的原文擦掉（主进程只给了"会画上译文"的那些原文框）。
+    // 擦除只在这里做一次：段落框里行与行之间本来就是干净的底，不用再整块涂一遍，
+    // 涂了反而会在渐变背景上留下一块块方块。
     const cleanCtxForErase = clean.getContext('2d');
+    const keep = (data.keepRects || []).map(r => ({ x0: r.x * scaleX, y0: r.y * scaleY, x1: (r.x + r.width) * scaleX, y1: (r.y + r.height) * scaleY }));
     (data.eraseRects || []).forEach(r => {
-      const x = Math.round(r.x * scaleX);
-      const y = Math.round(r.y * scaleY);
-      const w = Math.round(r.width * scaleX);
-      const h = Math.round(r.height * scaleY);
-      const bg = sampleEdgeColor(cleanCtxForErase, x, y, w, h);
-      ctx.fillStyle = `rgb(${bg.r},${bg.g},${bg.b})`;
-      ctx.fillRect(x - ERASE_PAD, y - ERASE_PAD, w + ERASE_PAD * 2, h + ERASE_PAD * 2);
+      eraseText(ctx, cleanCtxForErase, r.x * scaleX, r.y * scaleY, r.width * scaleX, r.height * scaleY, keep);
     });
 
     px.forEach((p, i) => {
       const { block, x, y, w, h } = p;
-      // Use the row's representative height for font sizing — same row → same font size
-      const { rowH, rowCenter } = rowMetrics[i];
+      // 同一行的块字号取这一行的中位数：菜单栏里 Tools（没下伸）和 Developers（有下伸）
+      // 框高不同，各算各的会一大一小
+      const { rowCenter, rowEm } = rowMetrics[i];
 
       const isParagraph = p.lineCount > 1;
       // rowH 取的是整行里最高的那个框，用来让同一行的块字号一致。但密排正文里
       // OCR 会把一行切成好几块、高度参差不齐，一个偏高的框就会把同行别的块的
       // 字号顶上去，画出一串压在别人身上的大字。谁都不许比自己那个框大太多。
-      const baseH = isParagraph ? p.lineH : Math.min(rowH, p.lineH * 1.25);
+      const baseH = p.lineH;
       // 原文是粗体才画粗体：笔画明显比这一屏的普通文字粗（1.25 倍以上）。
       // 以前按"行高超过 44 像素"判断，字大一点的正文也被画成粗体。
       const isBold = medianWeight > 0 && (block.weight || 0) > medianWeight * 1.25;
       const weight = isBold ? 'bold' : 'normal';
       const fontFamily = '-apple-system, "PingFang SC", "Hiragino Sans GB", sans-serif';
       const clampedH = Math.min(Math.max(baseH, minLineH), maxLineH);
-      let originalFontSize = Math.round(clampedH * FONT_HEIGHT_RATIO);
+      const ownEm = emFromBox(block.text, clampedH);
+      let originalFontSize = Math.round(isParagraph || !rowEm ? ownEm : Math.min(Math.max(rowEm, ownEm * 0.8), ownEm * 1.25));
 
-      // 按"面积/字数"再估一次字号，取小的那个。
-      //
-      // 框高不总等于一行高：OCR 经常把两三行糊进一个框，照框高定字号就画出一坨
-      // 两三倍大的字压在别人身上。但不管几行，"原文塞满这个框"这件事是成立的：
-      // 一个字大约占 0.5f 宽、1.3f 高，所以 宽×高 ≈ 0.65·f²·字数，反解出 f。
-      // 这个估计跟框里到底有几行无关，糊成一团的框会自动被压回正常字号；
-      // 而标题那种"框大字少"的，估出来的 f 反而更大，取小之后不受影响。
+      // 按"面积/字数"再估一次字号，取小的那个：OCR 偶尔把两三行糊进一个框，
+      // 照框高定字号就是一坨大字压在别人身上。拉丁字母平均宽约 0.5em、框高约 0.85em，
+      // 所以 宽×高 ≈ 0.42·em²·字数，反解出 em。标题那种"框大字少"的估出来反而更大，取小之后不受影响。
       const srcLen = (block.text || '').replace(/\s+/g, ' ').trim().length;
       if (srcLen >= 8 && w > 0 && h > 0) {
-        const fitted = Math.round(Math.sqrt((w * h) / (0.65 * srcLen)));
+        const fitted = Math.round(Math.sqrt((w * h) / (0.42 * srcLen)));
         if (fitted > 0) originalFontSize = Math.min(originalFontSize, fitted);
       }
       const minFontSize = Math.max(10, Math.floor(originalFontSize * MIN_FONT_RATIO));
@@ -144,11 +138,9 @@ window.api.onShowTranslation((data) => {
         }
       }
 
-      // Erase original text with sampled background color
+      // 字底下的颜色（选字色、判断对比度用）
       const cleanCtx = clean.getContext('2d');
       const bgColor = sampleEdgeColor(cleanCtx, x, y, w, h);
-      ctx.fillStyle = `rgb(${bgColor.r},${bgColor.g},${bgColor.b})`;
-      ctx.fillRect(x - ERASE_PAD, y - ERASE_PAD, w + ERASE_PAD * 2, h + ERASE_PAD * 2);
 
       // Draw translated text
       // 字色跟原文走：原文是什么颜色就画什么颜色，链接之类的色段单独上色。
@@ -156,7 +148,7 @@ window.api.onShowTranslation((data) => {
       const fallbackColor = bgColor.brightness > 128
         ? (bgColor.brightness > 200 ? '#1a1a1a' : '#000000')
         : (bgColor.brightness < 50 ? '#e0e0e0' : '#ffffff');
-      const baseColor = block.ink && contrastRatio(block.ink, bgColor) >= 2.2 ? rgbCss(block.ink) : fallbackColor;
+      const baseColor = block.ink && contrastRatio(block.ink, bgColor) >= 1.5 ? rgbCss(block.ink) : fallbackColor;
       const spans = (block.spans || [])
         .filter(sp => contrastRatio(sp.ink, bgColor) >= 1.8)
         .map(sp => ({ start: sp.start, end: sp.end, color: rgbCss(sp.ink), underline: !!sp.underline }));
@@ -319,10 +311,12 @@ window.addEventListener('blur', () => showOriginal(false));
 
 /// 按框宽折行。中日韩逐字可断，拉丁词按空格断；一个词比整行还长时硬断。
 /// 每行记下它在原文里从第几个字开始，上色时按这个下标对到色段上。
+const NO_LINE_START = /^[。，、；：？！）」』】〉》”’.,;:?!)\]}…%]/;
+
 function wrapLines(ctx, text, maxWidth) {
   text = String(text);
   const lines = [];
-  const re = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]|[^\s\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]+|\s+/g;
+  const re = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]|[\u3000-\u303f\uff00-\uffef]|[^\s\u3000-\u303f\uff00-\uffef\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]+|\s+/g;
   let start = -1;   // 当前行第一个字的下标
   let end = -1;     // 当前行最后一个非空白字符之后的下标
   for (let m; (m = re.exec(text)); ) {
@@ -330,7 +324,8 @@ function wrapLines(ctx, text, maxWidth) {
     if (/^\s+$/.test(token)) continue;
     if (start < 0) { start = m.index; end = m.index + token.length; continue; }
     const candidate = text.slice(start, m.index + token.length);
-    if (ctx.measureText(candidate).width > maxWidth) {
+    // 行首不许是标点（。，、）」…）：它跟着上一行走，宁可上一行略超一点
+    if (ctx.measureText(candidate).width > maxWidth && !NO_LINE_START.test(token)) {
       lines.push({ text: text.slice(start, end), start });
       start = m.index;
     }
@@ -466,7 +461,11 @@ function clusterRowsAndGetHeights(items) {
       j++;
     } while (j < sorted.length && sorted[j].center - startCenter < tolerance);
     const rowCenter = centerSum / (j - i);
-    for (let k = i; k < j; k++) result[sorted[k].idx] = { rowH: maxH, rowCenter };
+    const ems = [];
+    for (let k = i; k < j; k++) ems.push(emFromBox(sorted[k].it.block.text, sorted[k].it.lineH));
+    ems.sort((a, b) => a - b);
+    const rowEm = ems[ems.length >> 1];
+    for (let k = i; k < j; k++) result[sorted[k].idx] = { rowH: maxH, rowCenter, rowEm };
     i = j;
   }
   return result;
@@ -496,4 +495,133 @@ function sampleEdgeColor(cleanCtx, x, y, w, h) {
   const r = Math.round(best.r / best.n), g = Math.round(best.g / best.n), b = Math.round(best.b / best.n);
   const brightness = (r * 299 + g * 587 + b * 114) / 1000;
   return { r, g, b, brightness };
+}
+
+
+/// 从 OCR 框高推原文字号（em）。Vision 的框只包住字形本身：
+/// 没有下伸字母（g j p q y）的英文只有大写字母那么高，约 0.72em；带下伸的约 0.93em；
+/// 中日韩字约 0.92em。以前一律按框高 × 0.75 画，没下伸的标题、按钮文字就被画成原来的一半大。
+function emFromBox(text, boxH) {
+  const t = String(text || '');
+  if (/[぀-ヿ一-鿿가-힯]/.test(t)) return boxH / 0.92;
+  if (/[gjpqy,;]/.test(t)) return boxH / 0.93;
+  return boxH / 0.72;
+}
+
+/// 擦掉一块原文。
+/// 1. 框按墨迹往外扩：Vision 的框常常比字形小一圈（大号字尤其明显），照框擦会留下字的边。
+///    框外一行/一列里还有明显不同于底色的像素，就再往外扩一像素，最多扩出三分之一个框高。
+/// 2. 取框外一圈的颜色。一圈都差不多（纯色底）→ 整块填这个颜色；
+///    颜色有变化（渐变、花纹、图片）→ 按四边的颜色插值出"这里本来的底"，
+///    只把和它差得远的像素（字的笔画，外扩 1 像素吃掉描边）换成插值，其余像素原样保留。
+function eraseText(ctx, cleanCtx, fx, fy, fw, fh, keep = []) {
+  const W = canvas.width, H = canvas.height;
+  let x0 = Math.max(0, Math.floor(fx) - 1), y0 = Math.max(0, Math.floor(fy) - 1);
+  let x1 = Math.min(W - 1, Math.ceil(fx + fw) + 1), y1 = Math.min(H - 1, Math.ceil(fy + fh) + 1);
+  if (x1 - x0 < 2 || y1 - y0 < 2) return;
+  const maxGrow = Math.max(2, Math.round((y1 - y0) * 0.35));
+  const lx = Math.max(0, x0 - maxGrow), ly = Math.max(0, y0 - maxGrow);
+  const lw = Math.min(W - 1, x1 + maxGrow) - lx + 1, lh = Math.min(H - 1, y1 + maxGrow) - ly + 1;
+  const src = cleanCtx.getImageData(lx, ly, lw, lh);
+  const d = src.data;
+  const at = (x, y) => ((y - ly) * lw + (x - lx)) * 4;
+  const dist = (i, c) => Math.abs(d[i] - c[0]) + Math.abs(d[i + 1] - c[1]) + Math.abs(d[i + 2] - c[2]);
+  const ringColor = () => {
+    const e = sampleEdgeColor(cleanCtx, x0 - 1, y0 - 1, x1 - x0 + 2, y1 - y0 + 2);
+    return [e.r, e.g, e.b];
+  };
+  // 一行（或一列）里有多少"字色"像素：跟底色差 90 以上
+  const inkIn = (xa, ya, xb, yb, c) => {
+    let n = 0, tot = 0;
+    for (let y = ya; y <= yb; y++) for (let x = xa; x <= xb; x++) { tot++; if (dist(at(x, y), c) > 90) n++; }
+    return tot ? n / tot : 0;
+  };
+  // 往外扩不许碰到不擦的字：上下左右各自的边界先按它们收好
+  let minY = ly, maxY = ly + lh - 1, minX = lx, maxX = lx + lw - 1;
+  for (const k of keep) {
+    const overlapX = Math.min(x1, k.x1) - Math.max(x0, k.x0) > 0;
+    const overlapY = Math.min(y1, k.y1) - Math.max(y0, k.y0) > 0;
+    if (overlapX && k.y0 >= y1) maxY = Math.min(maxY, Math.floor(k.y0) - 1);
+    if (overlapX && k.y1 <= y0) minY = Math.max(minY, Math.ceil(k.y1) + 1);
+    if (overlapY && k.x0 >= x1) maxX = Math.min(maxX, Math.floor(k.x0) - 1);
+    if (overlapY && k.x1 <= x0) minX = Math.max(minX, Math.ceil(k.x1) + 1);
+  }
+  let bg = ringColor();
+  for (let grown = 0; grown < maxGrow; grown++) {
+    let changed = false;
+    if (y1 + 1 <= maxY && inkIn(x0, y1 + 1, x1, y1 + 1, bg) > 0.02) { y1++; changed = true; }
+    if (y0 - 1 >= minY && inkIn(x0, y0 - 1, x1, y0 - 1, bg) > 0.02) { y0--; changed = true; }
+    if (x1 + 1 <= maxX && inkIn(x1 + 1, y0, x1 + 1, y1, bg) > 0.06) { x1++; changed = true; }
+    if (x0 - 1 >= minX && inkIn(x0 - 1, y0, x0 - 1, y1, bg) > 0.06) { x0--; changed = true; }
+    if (!changed) break;
+  }
+  x0 = Math.max(minX, x0 - 1); y0 = Math.max(minY, y0 - 1);
+  x1 = Math.min(maxX, x1 + 1); y1 = Math.min(maxY, y1 + 1);
+  const w = x1 - x0 + 1, h = y1 - y0 + 1;
+
+  // 四条边（框外一像素，拿不到就用框边），每条边做个 5 点中值，别让一个噪点带偏
+  const edge = (pts) => {
+    const vals = pts.map(([x, y]) => { const i = at(x, y); return [d[i], d[i + 1], d[i + 2]]; });
+    return vals.map((_, k) => {
+      const win = vals.slice(Math.max(0, k - 2), k + 3);
+      return [0, 1, 2].map(ch => win.map(v => v[ch]).sort((a, b) => a - b)[win.length >> 1]);
+    });
+  };
+  const ex0 = Math.max(lx, x0 - 1), ex1 = Math.min(lx + lw - 1, x1 + 1);
+  const ey0 = Math.max(ly, y0 - 1), ey1 = Math.min(ly + lh - 1, y1 + 1);
+  const top = edge(Array.from({ length: w }, (_, i) => [x0 + i, ey0]));
+  const bottom = edge(Array.from({ length: w }, (_, i) => [x0 + i, ey1]));
+  const left = edge(Array.from({ length: h }, (_, j) => [ex0, y0 + j]));
+  const right = edge(Array.from({ length: h }, (_, j) => [ex1, y0 + j]));
+
+  // 一圈颜色的起伏：各通道极差都很小就是纯色底
+  const ring = top.concat(bottom, left, right);
+  const spread = [0, 1, 2].map(ch => {
+    const v = ring.map(c => c[ch]).sort((a, b) => a - b);
+    return v[Math.floor(v.length * 0.9)] - v[Math.floor(v.length * 0.1)];
+  });
+  // 纯色底：一圈里六成以上的像素都是同一个颜色。一圈里偶尔压到上下行的笔画、链接下划线，
+  // 不该把它当成渐变——那样插值会把邻行的字色带进来，擦出一块发灰的方块。
+  const mode = ringColor();
+  const same = ring.filter(c => Math.abs(c[0] - mode[0]) + Math.abs(c[1] - mode[1]) + Math.abs(c[2] - mode[2]) <= 12).length;
+  if (Math.max(...spread) <= 10 || same >= ring.length * 0.6) {
+    const c = mode;
+    ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+    ctx.fillRect(x0, y0, w, h);
+    return;
+  }
+
+  // 渐变底：四边插值（Coons 曲面），只换笔画像素
+  const P00 = top[0], P10 = top[w - 1], P01 = bottom[0], P11 = bottom[w - 1];
+  const out = ctx.getImageData(x0, y0, w, h);
+  const o = out.data;
+  const base = new Float32Array(w * h * 3);
+  const mask = new Uint8Array(w * h);
+  for (let j = 0; j < h; j++) {
+    const v = h > 1 ? j / (h - 1) : 0;
+    for (let i = 0; i < w; i++) {
+      const u = w > 1 ? i / (w - 1) : 0;
+      const k = j * w + i;
+      for (let ch = 0; ch < 3; ch++) {
+        const val = (1 - v) * top[i][ch] + v * bottom[i][ch] + (1 - u) * left[j][ch] + u * right[j][ch]
+          - ((1 - u) * (1 - v) * P00[ch] + u * (1 - v) * P10[ch] + (1 - u) * v * P01[ch] + u * v * P11[ch]);
+        base[k * 3 + ch] = val;
+      }
+      const si = at(x0 + i, y0 + j);
+      const diff = Math.abs(d[si] - base[k * 3]) + Math.abs(d[si + 1] - base[k * 3 + 1]) + Math.abs(d[si + 2] - base[k * 3 + 2]);
+      if (diff > 22) mask[k] = 1;
+    }
+  }
+  // 笔画外扩 2 像素，把抗锯齿的描边一起换掉，不然会留一层淡淡的字影
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    const k = j * w + i;
+    let hit = mask[k] === 1;
+    if (!hit) for (let dj = -2; dj <= 2 && !hit; dj++) for (let di = -2; di <= 2 && !hit; di++) {
+      const ii = i + di, jj = j + dj;
+      if (ii >= 0 && jj >= 0 && ii < w && jj < h && mask[jj * w + ii] === 1) hit = true;
+    }
+    if (!hit) continue;
+    o[k * 4] = base[k * 3]; o[k * 4 + 1] = base[k * 3 + 1]; o[k * 4 + 2] = base[k * 3 + 2]; o[k * 4 + 3] = 255;
+  }
+  ctx.putImageData(out, x0, y0);
 }
