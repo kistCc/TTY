@@ -1,6 +1,6 @@
 import { execFile } from 'child_process';
 import { ensureNative, debugLog } from './native';
-import { InkInfo, InkToken, RGB, summarizeTokens } from './ink';
+import { InkInfo, InkToken, RGB, summarizeTokens, sameInk } from './ink';
 
 export interface TextBlock extends InkInfo {
   text: string;
@@ -145,6 +145,30 @@ export function stripGlyphIcons(raw: RawBlock): RawBlock[] {
     && !(word(last) === '7' && /^(?:Windows|iOS|Android|Java|Python|PHP|Chapter|Part|Step|Version|Level|Day|Week|Page|Vol\.?|No\.?|Section|Episode|Season)$/i.test(word(last - 1)))) drop.add(last);
   // 行首单独一个 "("、后面没有配对的 ")"：Cookie 图标 🍪 被认成了括号
   if (word(0) === '(' && hasWord(1) && !raw.text.slice(toks[1].s).includes(')')) drop.add(0);
+  // 外链图标 ↗ 常被认成 L、1、J、[：真字母 L、数字 1 的宽度不到字框高的一半，图标差不多是个正方形（0.8 左右）
+  if (/^[L1J\[]$/.test(word(last)) && last > 0 && hasWord(last - 1) && toks[last].w! >= raw.height * 0.6) drop.add(last);
+  // 行首、行尾一两个字符的"词"，颜色和挨着的词明显不同：彩色图标（✨ 认成 *†、红色直播图标认成 O、
+  // Docker 的闪光认成 *+、Thunderbird 的收件箱图标认成 &3）。纯数字（编号、计数）和两个字母的词（AI、Go）不算
+  const iconish = (w: string) => w.length <= 2 && !/^\d+$/.test(w) && !/^\p{L}\p{L}$/u.test(w)
+    // 标点、括号、编号（"1)"）、能单独成词的字母（a、A、I）、中日韩单字都是真字
+    && !/^[.,:;!?()\[\]{}"'“”‘’]$/.test(w) && !/^\d[.)]$/.test(w) && !/^[a-zAI]$/.test(w)
+    && !/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(w);
+  const colorOff = (i: number, j: number) => toks[i].n >= 20 && toks[j].n >= 20 && !sameInk(toks[i].c, toks[j].c);
+  // 行首可能连着两个图标（BBC 的"≡ 🔍"认成"三Q"、后面红色直播图标认成"O"）：前一个拿掉了再看下一个
+  for (let i = 0; i <= 1 && i < last; i++) {
+    if (i > 0 && !drop.has(i - 1)) break;
+    const w = word(i);
+    // 汉字 + 拉丁字母（≡🔍 认成"三Q"、文A 认成"本A"），后面是外文词
+    const cjkLatin = /^[一-鿿][A-Za-z]$/.test(w) && /[A-Za-z]{2}/.test(word(i + 1));
+    // 放大镜认成 O、Q、C，后面是"搜索"
+    const lens = /^[OQCo○◯]$/.test(w) && /^(?:Search|Buscar|Suche|Rechercher|Cerca|Pesquisar|Zoeken|Szukaj|Поиск|検索|搜索|검색)/i.test(word(i + 1));
+    // 语言图标 文A 认成 XA、ХА，后面是语言名
+    const langIcon = /^[\p{L}\p{S}]?[AА]$/u.test(w) && w.length === 2 && /^(?:English|Español|Deutsch|Français|Italiano|Português|日本語|中文|한국어|Language|Languages|\d+)/i.test(word(i + 1));
+    // 行首单独的小写 i 后面跟大写开头的词：ⓘ 信息图标、logo 图形
+    const infoI = w === 'i' && /^\p{Lu}/u.test(word(i + 1));
+    if (cjkLatin || lens || langIcon || infoI || (iconish(w) && hasWord(i + 1) && colorOff(i, i + 1))) drop.add(i);
+  }
+  if (!drop.has(last) && last > 0 && iconish(word(last)) && hasWord(last - 1) && colorOff(last, last - 1)) drop.add(last);
   for (let i = 1; i < last; i++) {
     if (/^[vV⌄∨˅]$/.test(word(i)) && hasWord(i - 1) && /^\p{Lu}/u.test(word(i + 1))) { drop.add(i); split.add(i + 1); }
     // 行中间单独一个箭头、圆点、等号之类（头像、描述图标常被认成 → • =）：拿掉，并从这里拆开

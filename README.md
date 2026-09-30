@@ -105,7 +105,7 @@
 ### OCR & 翻译
 - **分块识别 + 版面重建** — 整屏分格子找字、按区域放大重认，再按行距/左边缘/字号/底色把文本块还原成段落，整段翻译整段覆盖
 - **Vision Revision 3** — 使用 macOS 最新 OCR 模型
-- **多引擎** — Google（免费）/ 有道（免费）/ OpenAI / Anthropic / DeepL / Ollama
+- **多引擎** — Google（免费）/ 有道（免费）/ Apple 翻译（免费，离线，macOS 26.4 起）/ OpenAI / Anthropic / DeepL / Ollama
 - **翻译缓存** — `Shift+S` 手动保存，相同内容秒显
 - **自动代理** — 自动读取 macOS 系统代理设置
 
@@ -155,8 +155,8 @@ npm install
 npm run dev
 ```
 
-本仓库只提交源码，`scripts/` 下的三个原生工具（OCR / 热键 / 辅助功能取词）是
-Objective-C 源码，`npm run build` 会先用 clang 编译它们，再编译 TypeScript：
+本仓库只提交源码，`scripts/` 下的原生工具（OCR / 热键 / 辅助功能取词是 Objective-C，
+Apple 翻译是 Swift），`npm run build` 会先用 clang 和 swiftc 编译它们，再编译 TypeScript：
 
 ```bash
 npm run build:native   # 只编译 scripts/ 下的原生工具
@@ -252,10 +252,11 @@ src/renderer/            渲染层（纯 HTML/JS）
   selection.html/js      选区框选 UI
   settings.html/js       设置页面（中英双语）
 
-scripts/                 原生 macOS 工具（Objective-C）
+scripts/                 原生 macOS 工具（Objective-C / Swift）
   ocr-macos.m            Vision OCR：分块找字、按区域放大重认，按词量字色、认下划线
   hotkey-macos.m         CGEventTap 全局热键
   axtext-macos.m         Accessibility 文字读取
+  translate-macos.swift  系统翻译（Translation 框架，离线）
 ```
 
 ## 开源协议

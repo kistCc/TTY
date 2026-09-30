@@ -28,6 +28,7 @@ _backup/
 scripts/ocr-macos
 scripts/hotkey-macos
 scripts/axtext-macos
+scripts/translate-macos
 
 # 非运行必需（文件保留在本地，不进仓库）
 CLAUDE.md

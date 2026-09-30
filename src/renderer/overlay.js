@@ -92,7 +92,7 @@ window.api.onShowTranslation((data) => {
     const keep = (data.keepRects || []).map(r => ({ x0: r.x * scaleX, y0: r.y * scaleY, x1: (r.x + r.width) * scaleX, y1: (r.y + r.height) * scaleY }));
     eraseGuards = [];
     (data.eraseRects || []).forEach(r => {
-      eraseText(ctx, cleanCtxForErase, r.x * scaleX, r.y * scaleY, r.width * scaleX, r.height * scaleY, keep);
+      eraseText(ctx, cleanCtxForErase, r.x * scaleX, r.y * scaleY, r.width * scaleX, r.height * scaleY, keep, { underline: !!r.underline, cjk: !!r.cjk });
     });
     // 字框左端压着一个保留下来的图标（单选圈、▲、色块、面包屑 ›）：译文从图标右边起笔，宽度相应缩短
     for (const p of px) {
@@ -149,6 +149,13 @@ window.api.onShowTranslation((data) => {
       if (!isParagraph && !srcCJK && dstCJK) {
         const cap = measureCapHeight(clean.getContext('2d'), x, y, w, h, block.text || '');
         if (cap && cap >= h * 0.3 && cap <= h * 1.1) originalFontSize = Math.max(8, Math.round(cap * 1.12));
+      }
+      // 兜底：译文汉字不许比原文实测字高大 1.25 倍以上（汉字字身约 0.88 个字号，所以字号 ≤ 字高 × 1.42）。
+      // 框被撑高（重音符、上下行糊在一起、日文注音）时，前面按框高推的字号会偏大一截
+      if (dstCJK) {
+        const lh = isParagraph ? p.lineH : h;
+        const band = measureCapHeight(clean.getContext('2d'), x, y, w, lh, block.text || '');
+        if (band && band >= lh * 0.3 && band <= lh * 1.1) originalFontSize = Math.min(originalFontSize, Math.max(8, Math.round(band * 1.42)));
       }
       const minFontSize = Math.max(10, Math.floor(originalFontSize * MIN_FONT_RATIO));
       let fontSize = originalFontSize;
@@ -576,7 +583,7 @@ function measureCapHeight(cleanCtx, x, y, w, h, text) {
   for (let j = band.length - 1; j >= 0; j--) if (!underline(band[j]) && band[j] >= maxText * 0.3) { base = j; break; }
   if (top < 0 || base <= top) return 0;
   let cap = base - top + 1;
-  if (!/[A-Z0-9bdfhkltА-ЯЁ]/.test(text)) cap *= 1.36;
+  if (!/[A-Z0-9bdfhkltА-ЯЁ\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(text)) cap *= 1.36;
   return cap;
 }
 
@@ -595,7 +602,7 @@ let eraseGuards = [];
 /// 投票三角、头像、输入框边框——不是这段字，只是框压到了它的边，原样留着（连外面 1 像素的抗锯齿边）；
 /// 面积超过框一半的块是色块、按钮底，也留着。其余像素（字形和它周围的底）填底色。
 /// 思路参考 comic-translate / manga-image-translator：按连通块判断哪些像素是字，再只擦字。
-function fillSolidKeepingForeign(ctx, cleanCtx, x0, y0, x1, y1, c) {
+function fillSolidKeepingForeign(ctx, cleanCtx, x0, y0, x1, y1, c, opts = {}) {
   const W = canvas.width, H = canvas.height;
   const w = x1 - x0 + 1, h = y1 - y0 + 1;
   const E = Math.max(4, Math.round(Math.min(h, 40) * 0.6));
@@ -626,10 +633,12 @@ function fillSolidKeepingForeign(ctx, cleanCtx, x0, y0, x1, y1, c) {
     const k0 = y * rw + x;
     if (!ink[k0] || label[k0] >= 0) continue;
     let cin = 0, cout = 0, sn = 0, sr = 0, sg = 0, sb = 0;
+    let cx0 = Infinity, cx1 = -1, cy0 = Infinity, cy1 = -1;
     label[k0] = n; stack.push(k0);
     while (stack.length) {
       const k = stack.pop();
       const px = k % rw, py = (k - px) / rw;
+      if (px < cx0) cx0 = px; if (px > cx1) cx1 = px; if (py < cy0) cy0 = py; if (py > cy1) cy1 = py;
       if (px >= bx0 && px <= bx1 && py >= by0 && py <= by1) cin++; else cout++;
       const si = k * 4;
       if (strong(si)) { sn++; sr += src[si]; sg += src[si + 1]; sb += src[si + 2]; }
@@ -645,6 +654,10 @@ function fillSolidKeepingForeign(ctx, cleanCtx, x0, y0, x1, y1, c) {
     // 单选圈、三角、色块边、头像只是被框压到了边，留着。
     // 伸进框里很深的（字形连着下划线、标签胶囊的描边、上下相邻行）不留：框里的部分照擦，框外的本来就不动
     let keepIt = cin > w * h * 0.5;
+    // 字下面一道又细又长、不连着字形的横条：选中标签的指示条、标签栏底线。不是这段字，留着。
+    // 字自己带下划线（链接）的不留：浮层会按译文长度重画下划线
+    if (!keepIt && !opts.underline && cy1 - cy0 + 1 <= Math.max(3, Math.round(h * 0.18))
+      && cx1 - cx0 + 1 >= w * 0.5 && cy0 - by0 >= h * 0.55) keepIt = true;
     if (!keepIt && cout > Math.max(3, (cin + cout) * 0.25)) {
       const m = Math.max(4, Math.round(h * 0.2));
       let ix0 = Infinity, ix1 = -1, iy0 = Infinity, iy1 = -1;
@@ -695,7 +708,7 @@ function fillSolidKeepingForeign(ctx, cleanCtx, x0, y0, x1, y1, c) {
 /// 2. 取框外一圈的颜色。一圈都差不多（纯色底）→ 整块填这个颜色；
 ///    颜色有变化（渐变、花纹、图片）→ 按四边的颜色插值出"这里本来的底"，
 ///    只把和它差得远的像素（字的笔画，外扩 1 像素吃掉描边）换成插值，其余像素原样保留。
-function eraseText(ctx, cleanCtx, fx, fy, fw, fh, keep = []) {
+function eraseText(ctx, cleanCtx, fx, fy, fw, fh, keep = [], opts = {}) {
   const W = canvas.width, H = canvas.height;
   let x0 = Math.max(0, Math.floor(fx) - 1), y0 = Math.max(0, Math.floor(fy) - 1);
   let x1 = Math.min(W - 1, Math.ceil(fx + fw) + 1), y1 = Math.min(H - 1, Math.ceil(fy + fh) + 1);
@@ -704,8 +717,10 @@ function eraseText(ctx, cleanCtx, fx, fy, fw, fh, keep = []) {
   // 横向最多扩 0.12 个字高：原生程序已经按真实笔画收过框，横向再多扩就会吃掉紧挨着的图标、单选圈、色块
   const maxGrowX = Math.max(1, Math.round((y1 - y0) * 0.12));
   let grownX0 = 0, grownX1 = 0;
-  const lx = Math.max(0, x0 - maxGrow), ly = Math.max(0, y0 - maxGrow);
-  const lw = Math.min(W - 1, x1 + maxGrow) - lx + 1, lh = Math.min(H - 1, y1 + maxGrow) - ly + 1;
+  // 横向多取一段：框外漏掉的标点要往外找到一个字高开外
+  const growH = Math.max(maxGrow, Math.round((y1 - y0) * 1.4));
+  const lx = Math.max(0, x0 - growH), ly = Math.max(0, y0 - maxGrow);
+  const lw = Math.min(W - 1, x1 + growH) - lx + 1, lh = Math.min(H - 1, y1 + maxGrow) - ly + 1;
   const src = cleanCtx.getImageData(lx, ly, lw, lh);
   const d = src.data;
   const at = (x, y) => ((y - ly) * lw + (x - lx)) * 4;
@@ -750,6 +765,56 @@ function eraseText(ctx, cleanCtx, fx, fy, fw, fh, keep = []) {
     }
     return true;
   };
+  // 紧挨着框、没被框进来的一个小字形：Vision 常把句末的 」！＞、句点、®、引号漏在框外，
+  // 不擦就孤零零留在译文旁边。颜色和这段字一样、前后都隔着空白的才算；
+  // 拉丁文只收贴底的小点（. ,）和贴顶的小记号（® " '），面包屑 › 这类图标不碰；细高的 │ 是分隔线，不碰
+  function absorbStrayGlyphs() {
+    const Hh = y1 - y0 + 1;
+    const rs = [], gs = [], bs = [];
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const i = at(x, y);
+      if (dist(i, bg) > 90) { rs.push(d[i]); gs.push(d[i + 1]); bs.push(d[i + 2]); }
+    }
+    if (rs.length < 10) return;
+    const med = (a) => a.sort((p, q) => p - q)[a.length >> 1];
+    const ink = [med(rs), med(gs), med(bs)];
+    const lo = Math.max(minX, lx), hi = Math.min(maxX, lx + lw - 1);
+    const inRange = (x) => x >= lo && x <= hi;
+    const colN = (x) => { let n = 0; for (let y = y0; y <= y1; y++) if (dist(at(x, y), bg) > 90) n++; return n; };
+    const absorb = (dir) => {
+      let x = (dir > 0 ? x1 : x0) + dir, blank = 0;
+      while (inRange(x) && colN(x) === 0 && blank < Hh * 0.35) { x += dir; blank++; }
+      if (!inRange(x) || colN(x) === 0) return;
+      const xs = x;
+      let top = Infinity, bot = -1, cn = 0, cr = 0, cg = 0, cb = 0;
+      while (inRange(x) && colN(x) > 0) {
+        for (let y = y0; y <= y1; y++) {
+          const i = at(x, y);
+          if (dist(i, bg) > 90) { if (y < top) top = y; if (y > bot) bot = y; cn++; cr += d[i]; cg += d[i + 1]; cb += d[i + 2]; }
+        }
+        x += dir;
+        if (Math.abs(x - xs) > Hh * 0.7) return;
+      }
+      const xe = x - dir;
+      let gap = 0;
+      while (inRange(x) && colN(x) === 0 && gap < Hh * 0.25) { x += dir; gap++; }
+      if (inRange(x) && gap < Hh * 0.25) return;
+      const gw = Math.abs(xe - xs) + 1, gh = bot - top + 1;
+      if (Math.abs(cr / cn - ink[0]) + Math.abs(cg / cn - ink[1]) + Math.abs(cb / cn - ink[2]) > 100) return;
+      if (gh >= Hh * 0.75 && gw <= Hh * 0.15) return;
+      const ok = opts.cjk
+        ? gw <= Hh * 0.7 && gh <= Hh * 1.05
+        : gw <= Hh * 0.35 && gh <= Hh * 0.4 && (top - y0 >= Hh * 0.5 || bot - y0 <= Hh * 0.5);
+      if (!ok) return;
+      // 不许碰保留的东西（图标、不翻的字）
+      const gx0 = Math.min(xs, xe), gx1 = Math.max(xs, xe);
+      if (keep.some(k => k.x0 <= gx1 + 1 && k.x1 >= gx0 - 1 && k.y0 <= bot && k.y1 >= top)) return;
+      if (dir > 0) x1 = xe; else x0 = xe;
+    };
+    absorb(1);
+    // 左边只在中日韩文里找（「、（）；拉丁文左边挨着的多半是图标（放大镜的柄）
+    if (opts.cjk) absorb(-1);
+  }
   for (let grown = 0; grown < maxGrow; grown++) {
     let changed = false;
     if (y1 + 1 <= maxY && !lineRow(y1 + 1) && inkIn(x0, y1 + 1, x1, y1 + 1, bg) > 0.02) { y1++; changed = true; }
@@ -758,6 +823,7 @@ function eraseText(ctx, cleanCtx, fx, fy, fw, fh, keep = []) {
     if (grownX0 < maxGrowX && x0 - 1 >= minX && !lineCol(x0 - 1) && !solidAhead(x0 - 1, -1) && inkIn(x0 - 1, y0, x0 - 1, y1, bg) > 0.06) { x0--; grownX0++; changed = true; }
     if (!changed) break;
   }
+  absorbStrayGlyphs();
   x0 = Math.max(minX, x0 - 1); y0 = Math.max(minY, y0 - 1);
   x1 = Math.min(maxX, x1 + 1); y1 = Math.min(maxY, y1 + 1);
   // 框边上压着的横线（标题下的分隔线、输入框底边）：擦除范围收到线的里侧，留 2 像素，
@@ -812,8 +878,10 @@ function eraseText(ctx, cleanCtx, fx, fy, fw, fh, keep = []) {
   const same = ring.filter(c => Math.abs(c[0] - mode[0]) + Math.abs(c[1] - mode[1]) + Math.abs(c[2] - mode[2]) <= 12).length;
   // 四周不是一个颜色时，再看框里面：除了字以外大部分是同一个颜色（标签胶囊、按钮底色），就用它填，
   // 不用四边插值——插值会把胶囊边、外面的底色带进来，抹出一道色带
+  // 字压在徽章、标签胶囊里、擦除框又大过徽章时（NEW 徽章、蓝底标签），四周一圈是徽章外面的底色，
+  // 照它填会把徽章擦掉。框里除了字以外大部分是另一个颜色，就用框里的颜色填
   let inner = null;
-  if (!(Math.max(...spread) <= 10 || same >= ring.length * 0.6)) {
+  {
     const buckets = new Map();
     let tot = 0;
     for (let yy = y0 + 1; yy < y1; yy++) for (let xx = x0 + 1; xx < x1; xx++) {
@@ -825,10 +893,13 @@ function eraseText(ctx, cleanCtx, fx, fy, fw, fh, keep = []) {
     let best = null;
     for (const e of buckets.values()) if (!best || e.n > best.n) best = e;
     if (best && tot && best.n >= tot * 0.5) inner = [Math.round(best.r / best.n), Math.round(best.g / best.n), Math.round(best.b / best.n)];
+    // 四周是纯色、框里也是同一个颜色（普通的字）：照旧用四周的颜色
+    if (inner && (Math.max(...spread) <= 10 || same >= ring.length * 0.6)
+      && Math.abs(inner[0] - mode[0]) + Math.abs(inner[1] - mode[1]) + Math.abs(inner[2] - mode[2]) <= 40) inner = null;
   }
   if (Math.max(...spread) <= 10 || same >= ring.length * 0.6 || inner) {
     const c = inner || mode;
-    fillSolidKeepingForeign(ctx, cleanCtx, x0, y0, x1, y1, c);
+    fillSolidKeepingForeign(ctx, cleanCtx, x0, y0, x1, y1, c, opts);
     restoreLines();
     return;
   }

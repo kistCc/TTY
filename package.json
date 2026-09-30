@@ -9,7 +9,7 @@
     "dev": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "build:native": "clang -O2 -fobjc-arc scripts/ocr-macos.m -o scripts/ocr-macos -framework Foundation -framework Vision -framework AppKit && clang -O2 -fobjc-arc scripts/hotkey-macos.m -o scripts/hotkey-macos -framework Foundation -framework Carbon -framework AppKit && clang -O2 -fobjc-arc scripts/axtext-macos.m -o scripts/axtext-macos -framework Foundation -framework AppKit -framework ApplicationServices"
+    "build:native": "clang -O2 -fobjc-arc scripts/ocr-macos.m -o scripts/ocr-macos -framework Foundation -framework Vision -framework AppKit && clang -O2 -fobjc-arc scripts/hotkey-macos.m -o scripts/hotkey-macos -framework Foundation -framework Carbon -framework AppKit && clang -O2 -fobjc-arc scripts/axtext-macos.m -o scripts/axtext-macos -framework Foundation -framework AppKit -framework ApplicationServices && swiftc -O scripts/translate-macos.swift -o scripts/translate-macos"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -75,6 +75,14 @@
       {
         "from": "scripts/axtext-macos.m",
         "to": "scripts/axtext-macos.m"
+      },
+      {
+        "from": "scripts/translate-macos",
+        "to": "scripts/translate-macos"
+      },
+      {
+        "from": "scripts/translate-macos.swift",
+        "to": "scripts/translate-macos.swift"
       }
     ],
     "asar": true,

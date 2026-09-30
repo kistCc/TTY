@@ -32,7 +32,7 @@ let activeProgressTimer: ReturnType<typeof setInterval> | null = null;
 const DEBOUNCE_MS = 1000;
 
 /// 这几档不需要 API Key，启动时别拿"没填 Key"当理由弹设置窗。
-const FREE_PROVIDERS = ['google', 'youdao', 'ollama'];
+const FREE_PROVIDERS = ['google', 'youdao', 'apple', 'ollama'];
 
 // Tray app: don't quit when all windows are closed
 app.on('window-all-closed', () => {

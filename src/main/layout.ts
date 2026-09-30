@@ -84,7 +84,10 @@ export function toCss(b: TextBlock, scaleFactor: number): TextBlock {
 export function eraseRectOf(b: TextBlock) {
   const bottom = b.y + b.height;
   const extra = b.eraseBottom && b.eraseBottom > bottom && b.eraseBottom <= bottom + b.height * 0.6 ? b.eraseBottom - bottom : 0;
-  return { x: b.x, y: b.y, width: b.width, height: b.height + extra };
+  // underline：带下划线的字，擦的时候字下面那道线也算字的一部分（浮层会按下划线重画）；
+  // cjk：中日韩文（至少两个字；"English、" 那种把下拉箭头认成顿号的不算），擦的时候把紧挨着框、没被框进来的标点（」！＞）一起擦
+  return { x: b.x, y: b.y, width: b.width, height: b.height + extra,
+    underline: !!(b.underline || extra), cjk: (String(b.text || '').match(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g) || []).length >= 2 };
 }
 
 /// 段落配上译文。颜色关掉时把颜色信息整个拿掉，浮层就按以前的黑白字画。

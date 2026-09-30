@@ -93,7 +93,7 @@ const UI_ZH: Record<string, string> = {
   'contribute': '贡献', 'contributing': '参与贡献', 'code of conduct': '行为准则', 'security policy': '安全策略', 'self-hosted': '自托管',
   'open source': '开源', 'use cases': '使用场景', 'case studies': '案例研究', 'marketplace': '市场', 'webinars': '网络研讨会',
   'podcast': '播客', 'videos': '视频', 'courses': '课程', 'certification': '认证', 'contact support': '联系支持', 'talk to sales': '联系销售',
-  'start for free': '免费开始', 'get a demo': '获取演示', 'book demo': '预约演示', 'sign up for free': '免费注册', 'dark mode': '深色模式',
+  'start for free': '免费开始', 'get a demo': '获取演示', 'book demo': '预约演示', 'watch live': '观看直播', 'sign up for free': '免费注册', 'dark mode': '深色模式',
   'light mode': '浅色模式', 'system default': '跟随系统', 'what\'s next': '接下来', 'overview & concepts': '概览与概念', 'api': 'API',
   'sdks': 'SDK', 'cli reference': 'CLI 参考', 'self-hosting': '自托管', 'integrations & plugins': '集成与插件', 'community forum': '社区论坛',
   // 百科

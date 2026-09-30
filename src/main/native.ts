@@ -8,7 +8,12 @@ import * as fs from 'fs';
 // （复制、解包都可能造成），运行时就会照着这份参数重编一次。参数但凡漏一个
 // framework，链接就失败，整条功能跟着断，用户看到的还是 clang 的原始报错。
 
-export type NativeTool = 'ocr-macos' | 'hotkey-macos' | 'axtext-macos';
+export type NativeTool = 'ocr-macos' | 'hotkey-macos' | 'axtext-macos' | 'translate-macos';
+
+/// 用 Swift 写的程序（系统翻译只有 Swift 接口），用 swiftc 编译，源码后缀 .swift
+const SWIFT_TOOLS = new Set<NativeTool>(['translate-macos']);
+const sourceExt = (tool: NativeTool) => SWIFT_TOOLS.has(tool) ? '.swift' : '.m';
+const compilerOf = (tool: NativeTool) => SWIFT_TOOLS.has(tool) ? 'swiftc' : 'clang';
 
 /// 排查日志放在 macOS 放应用日志的标准位置 ~/Library/Logs/TTY/。
 /// 系统自带的「控制台」App 左边的「日志报告」里能直接看到，用户找起来、发过来都方便。
@@ -44,9 +49,11 @@ const FRAMEWORKS: Record<NativeTool, string[]> = {
   'ocr-macos': ['Foundation', 'Vision', 'AppKit'],
   'hotkey-macos': ['Foundation', 'Carbon', 'AppKit'],
   'axtext-macos': ['Foundation', 'AppKit', 'ApplicationServices'],
+  'translate-macos': [],
 };
 
 export function buildArgs(tool: NativeTool, sourcePath: string, binaryPath: string): string[] {
+  if (SWIFT_TOOLS.has(tool)) return ['-O', sourcePath, '-o', binaryPath];
   const args = ['-O2', sourcePath, '-o', binaryPath];
   for (const fw of FRAMEWORKS[tool]) args.push('-framework', fw);
   args.push('-fobjc-arc');
@@ -56,11 +63,12 @@ export function buildArgs(tool: NativeTool, sourcePath: string, binaryPath: stri
 /// 找到某个原生程序：开发时在仓库的 scripts/ 下，打包后在 app 的 Resources/scripts/ 下。
 export function nativePaths(tool: NativeTool): { binaryPath: string; sourcePath: string } {
   const devPath = path.join(__dirname, '..', '..', 'scripts', tool);
-  if (fs.existsSync(devPath) || fs.existsSync(devPath + '.m')) {
-    return { binaryPath: devPath, sourcePath: devPath + '.m' };
+  const ext = sourceExt(tool);
+  if (fs.existsSync(devPath) || fs.existsSync(devPath + ext)) {
+    return { binaryPath: devPath, sourcePath: devPath + ext };
   }
   const prodPath = path.join(process.resourcesPath, 'scripts', tool);
-  return { binaryPath: prodPath, sourcePath: prodPath + '.m' };
+  return { binaryPath: prodPath, sourcePath: prodPath + ext };
 }
 
 /// 二进制是不是可以直接用（存在，且不比源码旧）
@@ -88,7 +96,7 @@ export function ensureNative(tool: NativeTool): Promise<{ binaryPath: string; er
   }
 
   return new Promise((resolve) => {
-    execFile('clang', buildArgs(tool, sourcePath, binaryPath), (err, _out, stderr) => {
+    execFile(compilerOf(tool), buildArgs(tool, sourcePath, binaryPath), (err, _out, stderr) => {
       if (!err) { resolve({ binaryPath }); return; }
 
       const detail = (stderr || err.message || '').toString().trim();
@@ -110,7 +118,7 @@ export function ensureNativeSync(tool: NativeTool): { binaryPath: string; ok: bo
   if (isBinaryFresh(binaryPath, sourcePath)) return { binaryPath, ok: true };
   if (!fs.existsSync(sourcePath)) return { binaryPath, ok: fs.existsSync(binaryPath) };
   try {
-    execFileSync('clang', buildArgs(tool, sourcePath, binaryPath));
+    execFileSync(compilerOf(tool), buildArgs(tool, sourcePath, binaryPath));
     return { binaryPath, ok: true };
   } catch (e: any) {
     console.log(`[native] 编译 ${tool} 失败：${(e?.stderr || e?.message || '').toString().slice(0, 300)}`);

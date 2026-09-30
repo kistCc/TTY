@@ -23,10 +23,11 @@ const I18N = {
     preset: 'Preset', model: 'Model',
     googleHint: 'Free, no API key required. Powered by Google Translate.',
     youdaoHint: 'Free, no API key required. Powered by Youdao Translate.',
+    appleHint: 'Free and offline, built into macOS (26.4 or later). Download languages first in System Settings → General → Language & Region → Translation Languages.',
     switchLang: '中文',
     apiKey: 'API Key', baseUrl: 'Base URL', custom: 'Custom',
     apiKeyPh: 'your-api-key',
-    provGoogle: 'Google Translate (Free)', provYoudao: 'Youdao Translate (Free)',
+    provGoogle: 'Google Translate (Free)', provYoudao: 'Youdao Translate (Free)', provApple: 'Apple Translate (Free, Offline)',
     provOpenAI: 'OpenAI Compatible',
     provClaude: 'Anthropic Compatible', provDeepL: 'DeepL',
     provOllama: 'Ollama (Local)',
@@ -43,10 +44,11 @@ const I18N = {
     preset: '预设', model: '模型',
     googleHint: '免费，无需 API Key。由 Google 翻译提供支持。',
     youdaoHint: '免费，无需 API Key。由有道翻译提供支持。',
+    appleHint: '免费、离线，macOS 自带（需 26.4 或更新）。先在「系统设置 → 通用 → 语言与地区 → 翻译语言」下载要用的语言。',
     switchLang: 'EN',
     apiKey: 'API Key', baseUrl: '接口地址', custom: '自定义',
     apiKeyPh: '在此粘贴你的 API Key',
-    provGoogle: 'Google 翻译（免费）', provYoudao: '有道翻译（免费）',
+    provGoogle: 'Google 翻译（免费）', provYoudao: '有道翻译（免费）', provApple: 'Apple 翻译（免费，离线）',
     provOpenAI: 'OpenAI 兼容接口',
     provClaude: 'Anthropic 兼容接口', provDeepL: 'DeepL',
     provOllama: 'Ollama（本地）',
@@ -98,11 +100,12 @@ const PRESETS = {
 
 // Provider field config: which fields to show
 // 免费服务不需要任何配置项，选中时只显示一行说明
-const FREE_PROVIDER_HINTS = { google: 'googleHint', youdao: 'youdaoHint' };
+const FREE_PROVIDER_HINTS = { google: 'googleHint', youdao: 'youdaoHint', apple: 'appleHint' };
 
 const PROVIDER_FIELDS = {
   google:  { preset: false, model: false, apiKey: false, baseUrl: false },
   youdao:  { preset: false, model: false, apiKey: false, baseUrl: false },
+  apple:   { preset: false, model: false, apiKey: false, baseUrl: false },
   openai:  { preset: true,  model: true,  apiKey: true,  baseUrl: true },
   claude:  { preset: true,  model: true,  apiKey: true,  baseUrl: true },
   deepl:   { preset: false, model: false, apiKey: true,  baseUrl: false },

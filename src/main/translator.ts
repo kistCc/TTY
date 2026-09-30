@@ -5,6 +5,7 @@ import { translateWithDeepL } from './providers/deepl';
 import { translateWithOllama } from './providers/ollama';
 import { translateWithGoogle } from './providers/google';
 import { translateWithYoudao } from './providers/youdao';
+import { translateWithApple } from './providers/apple';
 import { InkRun, InkSpan, MarkerStyle, wrapRuns, unwrapRuns } from './ink';
 import { debugLog } from './native';
 import { uiTerm, BRAND_WORDS } from './glossary';
@@ -189,7 +190,7 @@ function maskBrands(text: string, targetLang: string, provider: string, extra: R
   const brands: string[] = [];
   // 先遮夹着的中文，再遮产品名：产品名的正则不会碰到占位符，换回来一遍就够
   // 有道也会把英文句子里夹的中文换成它自己的占位符 <e:1> 再也不换回来（"Terminal 概览"→"终端<e:1>"），一样先遮起来
-  let masked = provider === 'google' || provider === 'youdao' ? maskTargetScript(text, targetLang, brands) : text;
+  let masked = provider === 'google' || provider === 'youdao' || provider === 'apple' ? maskTargetScript(text, targetLang, brands) : text;
   for (const re of [...LINK_PATTERNS, ...extra, ...BRAND_PATTERNS]) {
     masked = masked.replace(re, (hit) => {
       brands.push(hit);
@@ -340,6 +341,8 @@ async function translateUnique(
       return translateWithGoogle(texts, targetLang, providerConfig);
     case 'youdao':
       return translateWithYoudao(texts, targetLang, providerConfig);
+    case 'apple':
+      return translateWithApple(texts, targetLang, providerConfig);
     case 'openai':
       return translateWithOpenAI(texts, targetLang, providerConfig);
     case 'claude':
