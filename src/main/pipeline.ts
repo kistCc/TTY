@@ -1,11 +1,11 @@
 import * as crypto from 'crypto';
-import { performOCR, performDocLayout, assignDocParagraphs, TextBlock, WindowRect } from './ocr';
+import { performOCR, TextBlock, WindowRect } from './ocr';
 import { translateWithInk, inkSupported } from './translator';
 import { debugLog, debugLogVerbose } from './native';
 import {
   ParagraphBlock, filterForeignBlocks, toCss, eraseRectOf, withTranslation, groupIntoParagraphs,
   dropIconBlocks, dropUndersizedBoxes, dropLowConfidenceOverlaps, dropDuplicateBoxes, dropOversizedBoxes,
-  normalizeOcrText, stripTrailingIcon, looksLikeLogo, medianHeight, mergeCutLines, spreadCode, isCodeLine,
+  normalizeOcrText, stripTrailingIcon, looksLikeLogo, medianHeight, mergeCutLines, spreadCode, isCodeLine, isIdentifier,
 } from './layout';
 
 // 一张截图从识别到可以画的数据。全屏翻译、区域翻译、测试脚本走的都是这一条路，
@@ -35,13 +35,8 @@ export interface Rendered {
 export async function recognizeImage(
   imagePath: string, scaleFactor: number, cssWidth: number, targetLang: string, windows: WindowRect[] = [],
 ): Promise<Recognized> {
-  // 先认字，认完再看段落（文档识别）。两个同时跑会抢同一块神经网络引擎，实测两边都变慢好几倍。
-  // 段落只是提示，最多给它 0.7 秒，超时就杀掉不用（内容很杂的屏幕它要好几秒，不值得等；
-  // 大标题折行另有按版面的判断兜底）
-  const rawBlocks = await performOCR(imagePath, targetLang.split('-')[0]);
-  const docLines = await performDocLayout(imagePath, 700);
-  const ocrBlocks = assignDocParagraphs(rawBlocks, docLines);
-  debugLog(`识别：OCR ${ocrBlocks.length} 块，文档识别 ${docLines.length} 行`);
+  const ocrBlocks = await performOCR(imagePath, targetLang.split('-')[0]);
+  debugLog(`识别：OCR ${ocrBlocks.length} 块`);
   if (ocrBlocks.length) debugLog(`OCR 头几条: ${ocrBlocks.slice(0, 5).map(b => b.text).join(' | ')}`);
   for (const b of ocrBlocks) {
     debugLogVerbose(`  原始块 ${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}x${Math.round(b.height)} c=${b.confidence.toFixed(2)} w=${(b.weight || 0).toFixed(3)} | ${b.text}`);
@@ -51,7 +46,7 @@ export async function recognizeImage(
     .map(b => stripTrailingIcon({ ...b, text: normalizeOcrText(b.text) })));
   const hash = crypto.createHash('md5').update(cssBlocks.map(b => b.text).sort().join('|')).digest('hex');
   const medH = cssBlocks.length ? medianHeight(cssBlocks) : 0;
-  const code = spreadCode(cssBlocks, b => isCodeLine(b.text));
+  const code = spreadCode(cssBlocks, b => isCodeLine(b.text) || isIdentifier(b.text));
   const toTranslate = filterForeignBlocks(cssBlocks, targetLang).filter(b => !looksLikeLogo(b, medH) && !code.has(b));
   debugLog(`过滤后剩 ${toTranslate.length} 块要翻译（目标语言 ${targetLang}）`);
   const paragraphs = toTranslate.length
@@ -61,10 +56,29 @@ export async function recognizeImage(
   return { cssBlocks, toTranslate, paragraphs, hash };
 }
 
+/// 去掉空白和标点后逐字相同
+function sameText(a: string, b: string): boolean {
+  const k = (t: string) => t.replace(/[\s，,。.；;：:！!？?]/g, '');
+  return k(a) === k(b);
+}
+
 export async function translateRecognized(rec: Recognized, targetLang: string, config: any): Promise<Rendered> {
   const { paragraphs } = rec;
   const inkOn = inkSupported(config.provider);
   const results = await translateWithInk(paragraphs, targetLang, config, inkOn);
+  // 纯汉字的日文（“非表示”“出典”）会被 Google 当成中文原样退回。这一页上有假名时，
+  // 把"译文和原文一样、又带汉字"的几段指明按日文再翻一次。
+  const kanaParas = paragraphs.filter(p => /[\u3040-\u30ff]/.test(p.text)).length;
+  if (config.provider === 'google' && kanaParas >= 3) {
+    const redo = paragraphs.map((p, i) => i).filter(i =>
+      /[\u4e00-\u9fff]/.test(paragraphs[i].text) && results[i]?.text && sameText(results[i].text, paragraphs[i].text));
+    if (redo.length) {
+      const cfg = { ...config, providers: { ...config.providers, google: { ...(config.providers?.google || {}), from: 'ja' } } };
+      const again = await translateWithInk(redo.map(i => paragraphs[i]), targetLang, cfg, inkOn);
+      redo.forEach((i, k) => { if (again[k]?.text) results[i] = again[k]; });
+      debugLog(`按日文重翻 ${redo.length} 段`);
+    }
+  }
   const translations = results.map(r => r.text);
   debugLog(`翻译回来 ${translations.length} 条（保持颜色：${inkOn ? '开' : '关，当前翻译服务保不住颜色标记'}）`);
   paragraphs.forEach((b, i) => debugLog(
@@ -79,7 +93,7 @@ export async function translateRecognized(rec: Recognized, targetLang: string, c
   const failed = paragraphs.filter((_, i) => !translations[i]);
   if (failed.length) debugLog(`有 ${failed.length} 段没翻出来，保持原文不动`);
   // 译文和原文一样（文件名、本来就是中文、专名）的不画也不擦：擦了重画只会把原来的字画走样
-  const same = (a: string, b: string) => a.replace(/[\s，,。.；;：:！!？?]/g, '') === b.replace(/[\s，,。.；;：:！!？?]/g, '');
+  const same = sameText;
   const blocks = paragraphs
     .map((block, i) => withTranslation(block, results[i], inkOn))
     .filter(b => b.translated && !same(b.translated, b.text));
@@ -90,8 +104,15 @@ export async function translateRecognized(rec: Recognized, targetLang: string, c
     const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
     return cx >= p.x && cx <= p.x + p.width && cy >= p.y && cy <= p.y + p.height;
   };
-  const erased = rec.toTranslate.filter(r => blocks.some(p => inside(r, p)));
+  // 只擦真正拼进了"要画译文的段"的那些原始块；外框只是兜底（老数据没有 members 时）
+  const drawn = new Set(paragraphs.filter((p, i) => results[i]?.text && !same(results[i].text, p.text)).flatMap(p => p.members || []));
+  const erased = drawn.size
+    ? rec.toTranslate.filter(r => drawn.has(r))
+    : rec.toTranslate.filter(r => blocks.some(p => inside(r, p)));
   const eraseRects = erased.map(eraseRectOf);
-  const keepRects = rec.cssBlocks.filter(b => !erased.includes(b)).map(b => ({ x: b.x, y: b.y, width: b.width, height: b.height }));
+  const keepRects = rec.cssBlocks.filter(b => !erased.includes(b)).map(b => ({ x: b.x, y: b.y, width: b.width, height: b.height }))
+    // 从字里拿掉的图标也不许擦
+    // 图标四周多留 1.5 像素：量出来的范围不含抗锯齿的边，擦除会把单选圈、图标削掉一小截
+    .concat(rec.cssBlocks.flatMap(b => b.icons || []).map(r => ({ x: r.x - 1.5, y: r.y - 1.5, width: r.width + 3, height: r.height + 3 })));
   return { blocks, eraseRects, keepRects, failed: failed.length };
 }

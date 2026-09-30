@@ -2,9 +2,10 @@ import { ProviderConfig } from '../config';
 import { request } from '../http';
 import { mapBatchesConcurrent, alignedOrOneByOne } from '../batch';
 
-const BATCH_SIZE = 20;
+/// 一批多给一些：同一页的文字放在一起，模型才能从上下文判断领域和术语
+const BATCH_SIZE = 40;
 /// 整段翻译之后一条就是一整段；按字数再切一刀，免得一批的译文超过模型的输出上限被截断
-const BATCH_MAX_CHARS = 6000;
+const BATCH_MAX_CHARS = 8000;
 // 各家 OpenAI 兼容接口的并发上限差别很大，3 路是个保守又明显更快的取值。
 const MAX_CONCURRENCY = 3;
 
@@ -30,8 +31,10 @@ async function translateBatch(
   config: ProviderConfig
 ): Promise<string[]> {
   const input = JSON.stringify(texts);
-  const prompt = `Translate this JSON array of UI texts to ${targetLang}. Rules:
+  const prompt = `Translate this JSON array of UI texts to ${targetLang}. The texts were read (by OCR) from ONE screen or web page, in reading order. Rules:
 - Return ONLY a JSON array of the same length
+- First infer from all the texts what the page is about (e.g. programming docs, a news site, weather, finance, shopping), then translate every item — especially short menu items, labels and headings — with the standard terminology of that field, not the everyday meaning of the word
+- Keep code, commands, identifiers, package/library names, usernames and file names unchanged
 - Keep proper nouns, brand names, URLs, numbers unchanged
 - Tokens like XQZ0, XQZ1 are placeholders for product names: copy them exactly, do not translate, drop or reorder their text
 - Tags like <c1>...</c1> mark highlighted words (links, colored text): keep every tag pair exactly once, around the translation of the words it wraps; never drop, add or renumber tags
@@ -55,6 +58,8 @@ ${input}`;
       ],
       temperature: 0.1,
       max_tokens: 8192,
+      // DeepSeek 默认开推理模式：慢，而且常把答案写进 reasoning_content、content 为空。翻译不需要推理，关掉。
+      ...(/deepseek/i.test(baseUrl) ? { thinking: { type: 'disabled' } } : {}),
     }),
   });
 

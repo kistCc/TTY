@@ -22,8 +22,11 @@ export function appendPart(acc: string, part: string): string {
     if (acc.slice(-n) === part.slice(0, n)) return acc + part.slice(n);
   }
 
-  if (/[A-Za-z]-$/.test(acc)) return acc.slice(0, -1) + part;
-  const cjkTail = /[一-鿿぀-ヿ가-힯]$/.test(acc);
-  const cjkHead = /^[一-鿿぀-ヿ가-힯]/.test(part);
+  // 行尾连字符：下一行小写开头是英文断词（"configu-" + "ration"），去掉连字符；
+  // 大写开头是德文复合词本身带的连字符（"Kohlenstoffdioxid-" + "Assimilation"），留着
+  if (/\p{L}-$/u.test(acc)) return /^\p{Lu}/u.test(part) ? acc + part : acc.slice(0, -1) + part;
+  // 中日文接起来不加空格；韩文按词写，词与词之间本来就有空格，要加
+  const cjkTail = /[一-鿿぀-ヿ]$/.test(acc);
+  const cjkHead = /^[一-鿿぀-ヿ]/.test(part);
   return acc + (cjkTail && cjkHead ? '' : ' ') + part;
 }

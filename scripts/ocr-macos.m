@@ -82,6 +82,29 @@ static RGB edgeColor(const uint8_t *rgba, size_t W, size_t H, long x0, long y0, 
 /// 不取"离底色最远"的像素：词框常常带进旁边的标点（蓝色链接后面的白色逗号、中间的白点），
 /// 白色离深色底色更远，按远近取就会把蓝色链接量成白色；按数量取，链接自己的像素总是多数。
 /// *count 是那一桶的像素数，0 表示量不出来。
+/// 一个词框里真正有笔画的左右边界。Vision 给的词框把前后的空格也包进去，
+/// 相邻两个词的框几乎贴着（普通词距和一排菜单项之间的大空当量出来都是 2–5 像素），
+/// 按框算间距根本分不开。按像素找到第一列和最后一列有笔画的地方，间距才是真的。
+static BOOL inkExtent(const uint8_t *rgba, size_t W, size_t H, long x0, long y0, long x1, long y1, RGB bg, long *ix0, long *ix1) {
+    x0 = MAX(0, x0); x1 = MIN((long)W - 1, x1);
+    long h = y1 - y0;
+    long ya = MAX(0, y0 + h / 10), yb = MIN((long)H - 1, y1 - h / 10);
+    if (x1 <= x0 || yb <= ya) return NO;
+    long first = -1, last = -1;
+    for (long x = x0; x <= x1; x++) {
+        int hits = 0;
+        for (long y = ya; y <= yb && hits < 2; y++) {
+            const uint8_t *q = rgba + (y * W + x) * 4;
+            RGB c = { q[0], q[1], q[2] };
+            if (rgbDist(c, bg) > 80) hits++;
+        }
+        if (hits >= 2) { if (first < 0) first = x; last = x; }
+    }
+    if (first < 0 || last - first < 1) return NO;
+    *ix0 = first; *ix1 = last;
+    return YES;
+}
+
 static RGB inkColor(const uint8_t *rgba, size_t W, size_t H, long x0, long y0, long x1, long y1, RGB bg, long *count) {
     x0 = MAX(0, x0); y0 = MAX(0, y0); x1 = MIN((long)W, x1); y1 = MIN((long)H, y1);
     *count = 0;
@@ -195,7 +218,9 @@ static NSArray *tokenColors(VNRecognizedText *candidate, CGRect obsBox, CGRect r
         long n = 0;
         // 词框左右各收 1 像素，别把隔壁词的笔画算进来
         RGB tbg = edgeColor(rgba, W, H, x, y, x + w, y + h);
-        RGB ink = inkColor(rgba, W, H, x + 1, y, x + w - 1, y + h, bg, &n);
+        // 横向位置收到真正有笔画的范围（见 inkExtent），输出的 x、w 才能量出真实的词距
+        { long ix0, ix1; if (inkExtent(rgba, W, H, x, y, x + w, y + h, tbg, &ix0, &ix1)) { x = ix0; w = ix1 - ix0 + 1; } }
+        RGB ink = inkColor(rgba, W, H, x, y, x + w, y + h, bg, &n);
         // 这个词底下的底色跟整块的不一样（徽章、按钮拼在一起的块），量出来的颜色没意义
         if (rgbDist(tbg, bg) > 60) n = 0;
         // x、w 是这个词在原图上的横向位置：一行里词和词隔得特别开（一排菜单被认成一行）时，调用方按它拆开
@@ -256,14 +281,14 @@ static NSArray<NSString *> *kLanguages;
 
 /// 在一张图的某个区域（归一化坐标，原点左下）里认字。每次都新建 request 和 handler，可以并发调用。
 /// code=YES 时是代码、命令、JSON：关掉语言纠错（不然 is_tor 会被"纠正"成单词）、只按英文认。
-static NSArray *recognize(CGImageRef img, CGRect roi, BOOL code, NSError **error) {
+static NSArray *recognize(CGImageRef img, CGRect roi, BOOL code, NSArray<NSString *> *langs, NSError **error) {
     VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
     request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
     if (@available(macOS 13, *)) {
         request.revision = VNRecognizeTextRequestRevision3;
         request.automaticallyDetectsLanguage = !code;
     }
-    request.recognitionLanguages = code ? @[@"en-US"] : kLanguages;
+    request.recognitionLanguages = code ? @[@"en-US"] : (langs ?: kLanguages);
     request.usesLanguageCorrection = !code;
     request.minimumTextHeight = 0.0;
     request.regionOfInterest = roi;
@@ -337,17 +362,26 @@ static BOOL looksLikeCode(NSString *s) {
 
 /// 这一片里的字全都已经是目标语言（中文界面上的一片中文），或者根本没有字母
 static BOOL skipAsTarget(NSArray<Hit *> *members, NSString *target) {
-    NSString *pattern = [target hasPrefix:@"zh"] ? @"[\\u4e00-\\u9fff]"
+    // 目标语言自己的文字；外文 = 其余的字母（拉丁、假名、谚文）。中文目标下日文的假名算外文
+    NSString *own = [target hasPrefix:@"zh"] ? @"[\\u4e00-\\u9fff]"
         : [target hasPrefix:@"ja"] ? @"[\\u3040-\\u30ff\\u4e00-\\u9fff]"
         : [target hasPrefix:@"ko"] ? @"[\\uac00-\\ud7af]" : nil;
-    if (!pattern) return NO;
-    NSRegularExpression *own = [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:nil];
-    NSRegularExpression *latin = [NSRegularExpression regularExpressionWithPattern:@"[A-Za-z]" options:0 error:nil];
+    NSString *foreign = [target hasPrefix:@"zh"] ? @"[A-Za-z\\u3040-\\u30ff\\uac00-\\ud7af]"
+        : [target hasPrefix:@"ja"] ? @"[A-Za-z\\uac00-\\ud7af]"
+        : [target hasPrefix:@"ko"] ? @"[A-Za-z\\u3040-\\u30ff\\u4e00-\\u9fff]" : nil;
+    if (!own) return NO;
+    NSRegularExpression *ownRe = [NSRegularExpression regularExpressionWithPattern:own options:0 error:nil];
+    NSRegularExpression *forRe = [NSRegularExpression regularExpressionWithPattern:foreign options:0 error:nil];
     for (Hit *h in members) {
         NSString *t = h.cand.string;
-        NSUInteger o = [own numberOfMatchesInString:t options:0 range:NSMakeRange(0, t.length)];
-        NSUInteger l = [latin numberOfMatchesInString:t options:0 range:NSMakeRange(0, t.length)];
-        if (l >= 2 && o * 10 < (o + l) * 4) return NO;  // 有一块以外文为主，要重认
+        NSUInteger o = [ownRe numberOfMatchesInString:t options:0 range:NSMakeRange(0, t.length)];
+        NSUInteger f = [forRe numberOfMatchesInString:t options:0 range:NSMakeRange(0, t.length)];
+        if (f >= 2 && o * 10 < (o + f) * 4) return NO;  // 有一块以外文为主，要重认
+        // 中文目标下，带假名、谚文的就是日文、韩文，不管汉字占多少
+        if ([target hasPrefix:@"zh"]) {
+            NSRegularExpression *kanaRe = [NSRegularExpression regularExpressionWithPattern:@"[\\u3040-\\u30ff\\uac00-\\ud7af]" options:0 error:nil];
+            if ([kanaRe numberOfMatchesInString:t options:0 range:NSMakeRange(0, t.length)] >= 2) return NO;
+        }
     }
     return YES;
 }
@@ -399,9 +433,9 @@ int main(int argc, const char *argv[]) {
             CGFloat top = MAX(0, (CGFloat)r / rows - ovy), bottom = MIN(1, (CGFloat)(r + 1) / rows + ovy);
             CGRect roi = CGRectMake(left, 1.0 - bottom, right - left, bottom - top);
             NSError *err = nil;
-            NSArray *obs = recognize(pass1Image, roi, NO, &err);
+            NSArray *obs = recognize(pass1Image, roi, NO, nil, &err);
             // 偶尔一整块返回 0 个框（原因不明），换没放大的原图再认一次
-            if (!err && obs.count == 0 && pass1Image != cgImage) obs = recognize(cgImage, roi, NO, &err);
+            if (!err && obs.count == 0 && pass1Image != cgImage) obs = recognize(cgImage, roi, NO, nil, &err);
             @synchronized (tileHits) {
                 if (err) fatal = err;
                 tileHits[i] = hitsFrom(obs, roi, 0, 0, origW, origH);
@@ -504,7 +538,19 @@ int main(int argc, const char *argv[]) {
                 CGImageRef img = scaledCrop(cgImage, crop, k);
                 if (!img) return;
                 NSError *err = nil;
-                NSArray *obs = recognize(img, CGRectMake(0, 0, 1, 1), code, &err);
+                // 第一遍认出假名/谚文的片，按日文/韩文优先再认：语言表里中文排第一，
+                // 日文汉字会被认成中文字形（読売→讀煮），断行也乱
+                NSUInteger kana = 0, hangul = 0;
+                for (Hit *h in members) {
+                    NSString *s = h.cand.string;
+                    for (NSUInteger ci = 0; ci < s.length; ci++) {
+                        unichar c = [s characterAtIndex:ci];
+                        if (c >= 0x3040 && c <= 0x30ff) kana++;
+                        else if (c >= 0xac00 && c <= 0xd7af) hangul++;
+                    }
+                }
+                NSArray<NSString *> *langs = kana >= 2 ? @[@"ja", @"en"] : hangul >= 2 ? @[@"ko", @"en"] : nil;
+                NSArray *obs = recognize(img, CGRectMake(0, 0, 1, 1), code, langs, &err);
                 CGImageRelease(img);
                 if (err || !obs.count) return;
                 // 只要中心落在这一片自己范围里的结果：边距里露出半截的邻居归邻居那一片

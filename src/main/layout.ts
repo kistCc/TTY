@@ -7,13 +7,24 @@ import { debugLogVerbose } from './native';
 // 测试脚本也直接调这里，所以这里不碰 Electron。
 export function filterForeignBlocks(blocks: TextBlock[], targetLang: string): TextBlock[] {
   const targetPrefix = targetLang.split('-')[0];
+  const KANA = /[\u3040-\u30ff]/g, HAN = /[\u4e00-\u9fff]/g, HANGUL = /[\uac00-\ud7af]/g, LATIN = /[A-Za-z]/g;
+  const count = (t: string, re: RegExp) => (t.match(re) || []).length;
+  // 这一屏是不是日文页面：有好几块带假名。日文里只有汉字的短词（"政治"、"経済"）单看分不出是中文还是日文，
+  // 在日文页面上就当日文送去翻；真是中文的话翻译回来和原文一样，后面会被丢掉，不会画
+  const kanaBlocks = blocks.filter(b => count(b.text, KANA) >= 2).length;
+  const japanesePage = kanaBlocks >= 3 && kanaBlocks >= blocks.length * 0.1;
+  // 这一屏是不是中文页面（中文版的 Stripe、Meta 登录页）：带汉字、不带假名的块占四成以上。
+  // 中文界面里夹着英文产品名、按钮名（"使用 Payment Link"、"API 和 SDK"、"Cookie 政策"）是正常写法，不用翻，
+  // 送去翻只会把中文改坏（"收费链接"、"市场和SDKY"）
+  const lettered = blocks.filter(b => /\p{L}{2}/u.test(b.text));
+  const chinesePage = !japanesePage && lettered.length >= 5
+    && lettered.filter(b => count(b.text, HAN) >= 2 && !count(b.text, KANA)).length >= lettered.length * 0.4;
 
   return blocks.filter(block => {
     const text = block.text.trim();
     if (!text) return false;
     // 只挡掉 OCR 基本没看清的；宁可多翻一块，也别把英文留在屏幕上
     if (block.confidence < 0.05) return false;
-
 
     if (/^[\d\s.,:;!?@#$%^&*()\-+=<>{}[\]|/\\~`'"•●○◆★☆✓✗→←↑↓©®™℃°…]+$/.test(text)) return false;
     if (isIdentifier(text) || isCodeLine(text)) return false;
@@ -22,25 +33,34 @@ export function filterForeignBlocks(blocks: TextBlock[], targetLang: string): Te
     if (/^[0-9a-f]{6,}$/i.test(text)) return false;
     if (/^[\d.]+[KMGTkmgt]?[Bb]?\/s?$/.test(text)) return false;
     // 单个字母、单个符号翻了也没意义；两个字母以上一律翻
-    if (!/[a-zA-Z\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]{2}/.test(text)) return false;
+    // 任何文字的字母都算（俄文、希腊文、阿拉伯文……以前只认拉丁字母，俄文整页被当成不用翻）
+    if (!/\p{L}{2}/u.test(text)) return false;
 
+    const han = count(text, HAN), kana = count(text, KANA), hangul = count(text, HANGUL), latin = count(text, LATIN);
+    // 其他文字的字母（西里尔、希腊、阿拉伯、泰文……）一律算外文，和拉丁字母同等对待
+    const other = (text.match(/\p{L}/gu) || []).length - han - kana - hangul - latin - count(text, /[\u3400-\u4dbf]/g);
     if (targetPrefix === 'zh') {
-      // 只和字母比，不算标点、数字、空格："终端Shell脚本 - 308字节" 是中文界面上的一行，不用翻
-      const chineseChars = text.match(/[\u4e00-\u9fff]/g)?.length || 0;
-      const latin = text.match(/[A-Za-z]/g)?.length || 0;
-      return chineseChars < 2 || chineseChars / (chineseChars + latin) < 0.4;
+      // 只和字母比，不算标点、数字、空格："终端Shell脚本 - 308字节" 是中文界面上的一行，不用翻。
+      // 假名、谚文是外文（日文、韩文），和拉丁字母一样算
+      const foreign = latin + kana + hangul + other;
+      // 中文里不会出现假名、谚文：有两个以上就是日文、韩文，不管汉字占多少
+      if (kana + hangul >= 2) return true;
+      if (chinesePage && han >= 1) return false;
+      if (han < 2) return foreign >= 2;
+      if (japanesePage && kana + latin + hangul === 0) return true;
+      return han / (han + foreign) < 0.4;
     }
     if (targetPrefix === 'ja') {
-      const jpChars = text.match(/[\u3040-\u30ff\u4e00-\u9fff]/g)?.length || 0;
-      return jpChars / text.length < 0.5;
+      // 有假名就是日文；只有汉字、页面上又没有日文，就是中文，要翻
+      if (kana) return (kana + han) / (kana + han + latin + hangul + other) < 0.4;
+      if (han && !japanesePage) return true;
+      return han / Math.max(1, han + latin + hangul + other) < 0.4;
     }
     if (targetPrefix === 'ko') {
-      const koChars = text.match(/[\uac00-\ud7af]/g)?.length || 0;
-      return koChars / text.length < 0.5;
+      return hangul / Math.max(1, hangul + han + kana + latin + other) < 0.4;
     }
-    const latinChars = text.match(/[a-zA-Z]/g)?.length || 0;
     if (['en', 'fr', 'de', 'es', 'pt', 'it'].includes(targetPrefix)) {
-      return latinChars / text.length < 0.5;
+      return latin / text.length < 0.5;
     }
     return true;
   });
@@ -55,6 +75,7 @@ export function toCss(b: TextBlock, scaleFactor: number): TextBlock {
     width: b.width / scaleFactor,
     height: b.height / scaleFactor,
     eraseBottom: b.eraseBottom !== undefined ? b.eraseBottom / scaleFactor : undefined,
+    icons: b.icons?.map(r => ({ x: r.x / scaleFactor, y: r.y / scaleFactor, width: r.width / scaleFactor, height: r.height / scaleFactor })),
   };
 }
 
@@ -72,6 +93,7 @@ export function withTranslation(block: ParagraphBlock, result: { text: string; s
   if (!inkOn) { delete out.ink; delete out.runs; delete out.underline; }
   delete out.eraseBottom;
   delete out.segs;
+  delete out.members;
   return out;
 }
 
@@ -235,6 +257,16 @@ function clusterIntoLines(blocks: TextBlock[], screenWidth: number): TextBlock[]
         const limit = Math.max(prev.height, part.height) * 4;
         // 底色不一样就是两样东西（并排的两个按钮、标签和旁边的正文），挨得再近也不接
         const apart = differentBg(prev, part) && gap > Math.min(prev.height, part.height) * 0.3;
+        // 菜单项：空了一个字高以上，一边只有一两个词、右边大写开头，是并排的两项，不是一句话
+        const words = (t: string) => t.trim().split(/\s+/).length;
+        const segText = segment.map(b => b.text).join(' ');
+        const menuItems = gap > Math.max(prev.height, part.height) * 1.0
+          && (words(segText) <= 2 || words(part.text) <= 2) && !/^[a-z]/.test(part.text.trim());
+        if (menuItems) part.gapBefore = true;
+        // 字色差得很远（蓝色链接标题和后面灰色的域名、作者）又空了半个字高以上：是并排的两样东西
+        const inkDiff = prev.ink && part.ink
+          ? Math.abs(prev.ink[0] - part.ink[0]) + Math.abs(prev.ink[1] - part.ink[1]) + Math.abs(prev.ink[2] - part.ink[2]) : 0;
+        if (inkDiff > 150 && gap > Math.max(prev.height, part.height) * 0.5) part.gapBefore = true;
         if (gap > limit || part.gapBefore || apart) flushSegment();
       }
       segment.push(part);
@@ -258,7 +290,7 @@ function mergeParts(parts: TextBlock[]): TextBlock {
     x, y, width: right - x, height: Math.min(bottom - y, cap),
     weight: lineWeight(parts),
     gapBefore: parts[0].gapBefore,
-    docPara: parts.find(p => p.docPara !== undefined)?.docPara,
+    members: parts.flatMap(p => p.members || [p]),
     ...mergeInk(parts),
   };
 }
@@ -286,7 +318,11 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
   const groups: TextBlock[][] = [];
   const margin = new Map(sorted.map(l => [l, rightMargin(l, sorted)]));
   const singlePitch = singleSpacingRatio(sorted);
-  const pageH = sorted.length >= 4 ? medianHeight(sorted) : 0;
+  const downPitch = new Map(sorted.map(l => [l, nextLinePitch(l, sorted)]));
+  // 找"条与条之间"的行距时看远一点（OCR 框偏矮时，1.9 倍字高够不着下一条）
+  const upPitch = new Map(sorted.map(l => [l, prevLinePitch(l, sorted, 2.8)]));
+  const downPitchFar = new Map(sorted.map(l => [l, nextLinePitch(l, sorted, 2.8)]));
+  const bodyEm = sorted.length ? [...sorted.map(emOf)].sort((a, b) => a - b)[Math.floor(sorted.length / 2)] : 0;
 
   for (const line of sorted) {
     let bestIdx = -1;
@@ -300,22 +336,27 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
       if (pitch < 0) continue;
       // 底色不同的两行不是同一段：弹窗正文和旁边的按钮、卡片里的字和卡片外的字
       if (differentBg(last, line)) continue;
-      // Vision 的文档识别说它们在同一段里（大标题折成两行时行距很大，光看行距会拆开），
-      // 字号接近、横向有重叠，就接上
-      const docSame = line.docPara !== undefined && line.docPara === last.docPara
-        && line.height < last.height * 1.5 && line.height > last.height * 0.66
-        && Math.min(line.x + line.width, last.x + last.width) - Math.max(line.x, last.x) > 0
-        && pitch < Math.max(last.height, line.height) * 2.2;
-      if (docSame) { if (pitch < bestPitch) { bestPitch = pitch; bestIdx = i; } continue; }
-      // 大标题折成两行：字比这一屏的正文大得多（1.8 倍以上）、两行左边缘对齐、字号相近，
-      // 行距可以到字高的 1.9 倍（标题的行高按字号算，框高只有字号的七八成）
-      const bigTitle = pageH > 0 && Math.min(last.height, line.height) >= pageH * 1.8
-        && Math.abs(line.x - last.x) < Math.min(last.height, line.height) * 0.6
-        && line.height < last.height * 1.3 && line.height > last.height * 0.77
-        && pitch < Math.max(last.height, line.height) * 1.9
-        && !(last.weight && line.weight && Math.max(last.weight, line.weight) > Math.min(last.weight, line.weight) * 1.25);
-      if (bigTitle) { if (pitch < bestPitch) { bestPitch = pitch; bestIdx = i; } continue; }
-      if (pitch > Math.max(last.height, line.height) * 1.45) continue;
+      // 行距按字号（em）比，不按框高比：框高取决于这一行有没有 g、p、y 这类下伸字母，
+      // 全是大写或没有下伸的一行（标题、按钮）框只有字号的七成，按框高算会把正常行距当成段间距
+      const emMax = Math.max(emOf(last), emOf(line));
+      const emMin = Math.min(emOf(last), emOf(line));
+      // 上一行停在词中间或逗号上、下一行小写开头：一定是同一句话折了行
+      // 以虚词（and、the、of…）收尾的行也一定没说完，下一行大写开头也照样接上
+      const lastWords = last.text.trim().split(/\s+/).length;
+      const continues = (/[\p{L},;\-–—]$/u.test(last.text.trim()) && /^\p{Ll}/u.test(line.text.trim()) && !/[\u3040-\u30ff\u3400-\u9fff]$/.test(last.text.trim()))
+        || /[,\-–]$/.test(last.text.trim())
+        // 中日文任何字后都能折行：上一行没以句末标点收尾、下一行也是中日文，就是同一句
+        // 标题常以」』、・结尾；韩文有空格，不按词数卡
+        || (/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af」』）)、・…]$/.test(last.text.trim()) && /^[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af「『（(]/.test(line.text.trim())
+          && (lastWords === 1 || /[\uac00-\ud7af]/.test(last.text)) && last.text.trim().length >= 12
+          // 韩文标题以 -다/-요/-까 收尾就是一句完了（不带句号）
+          && !/[다요까죠네]$/.test(last.text.trim()))
+        || /\b(and|or|the|a|an|of|to|in|on|for|with|by|from|at|as|their|its|his|her|our|your|is|are|was|were|be|that|which)$/i.test(last.text.trim())
+        // 介词收尾也没说完，但一个词单独成行的（菜单里的 "About"）不算
+        || (lastWords >= 2 && /\b(between|about|into|onto|than|like|without|within|via|using|through|across|toward|towards|among|versus|vs\.?)$/i.test(last.text.trim()));
+      // 网页正文的行高一般是字号的 1.4–1.8 倍（维基 1.6），上限放到 1.9 倍；
+      // 段与段之间多出来的段距交给下面"和本段已有行距一致"那条去分。
+      if (pitch > emMin * 1.9) continue;
       // 行距接近 0 = 本来就是同一条视觉行（行内被断开的两段），无条件接上，
       // 不看左边缘也不看字号——否则它们会各自成段，然后在同一个位置互相压着画。
       // 但隔得太远的不算：聚行时已经按"空当超过 4 倍字高"把它们劈开了（那是隔壁窗口、
@@ -324,14 +365,67 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
       const sameVisualLine = pitch < Math.min(last.height, line.height) * 0.5
         && gapX <= Math.max(last.height, line.height) * 4 && !line.gapBefore && !last.gapBefore;
       if (sameVisualLine) { if (pitch < bestPitch) { bestPitch = pitch; bestIdx = i; } continue; }
-      if (line.height > last.height * 1.5 || line.height < last.height * 0.66) continue;
-      if (endsShort(last, line, margin.get(last)!)) continue;
-      // 段间距：行距明显大过这一页自己的单倍行距，就是两段之间多空出来的那一截
-      if (singlePitch && pitch > singlePitch * 1.25 * Math.max(last.height, line.height)) continue;
+      // 不能跳行：两行之间夹着别的行（横向和新行重叠），就不是同一段
+      const lc = last.y + last.height / 2, nc = line.y + line.height / 2;
+      if (sorted.some(o => o !== last && o !== line
+        && (o.y + o.height / 2) > lc + 2 && (o.y + o.height / 2) < nc - 2
+        && Math.min(o.x + o.width, line.x + line.width) - Math.max(o.x, line.x) > 0)) continue;
+      // 上下两行字色差得很远（蓝色链接标题和下面灰色的作者行、日期行）：不是同一段，句子像没说完也不接
+      // 下一行起头比上一行靠右一截（前面有头像、图标、缩进）：新的一段。正常折行下一行从同一个左边起头；
+      // OCR 把行首切走的情况在聚行时已经接回来了，这里看到的是整行
+      // 居中排版（Cookie 说明、信息框、提示条）每行起头本来就不同：两行中心对齐的不算
+      const centered = Math.abs((line.x + line.width / 2) - (last.x + last.width / 2)) < emMin;
+      if (line.x - last.x > emMin * 1.2 && !centered) continue;
+      // 行首有图标（目录的 ›、列表的 •、展开箭头）：新的一条。条目折行时第二行前面没有图标，照样接上
+      if (leadIcon(line)) continue;
+      // 光颜色不同不算（正文里某一行链接多，主色就成了蓝色），还得字号或粗细也明显不同
+      const inkGap = last.ink && line.ink ? Math.abs(last.ink[0] - line.ink[0]) + Math.abs(last.ink[1] - line.ink[1]) + Math.abs(last.ink[2] - line.ink[2]) : 0;
+      // 颜色差一截、下一行又往右缩进了半个字以上（蓝色标题下面前面有头像的灰色"via 某某 几小时前"）：两样东西。
+      // 正文折行的下一行从同一个左边起头，链接再多也不缩进
+      if (inkGap > 100 && line.x - last.x > emMin * 0.6 && !centered) continue;
+      const weightRatio = last.weight && line.weight ? Math.max(last.weight, line.weight) / Math.min(last.weight, line.weight) : 1;
+      if (inkGap > 150 && (emMax > emMin * 1.12 || weightRatio > 1.2)) continue;
+      // 颜色差一截、粗细也差一截（粗体彩色标题和下面细体灰字）：两样东西，句子像没说完也不接
+      if (inkGap > 100 && weightRatio > 1.25) continue;
+      // 容差放宽到 1.6：带上标引用（[1][2]）的行框会被撑高一半，字号其实一样
+      // 但只有句子明显没说完时才放这么宽；否则 1.3 倍：HN 的标题和下面的小字只差 1.4 倍，是两段
+      // 但一条目录项折成两三行时，条内的行距明显比条与条之间紧（德文维基 "Absorption von / Lichtenergie"：
+      // 19 像素 vs 27 像素）。德文名词大写，靠"下一行小写开头"认不出来，靠行距能认出来
+      // 上下两边都得有邻行、而且这一对比上下两边都明显紧，才算条内折行：均匀排的菜单、目录一条挨一条不会被误并
+      const upP = upPitch.get(last) || 0, downP = downPitchFar.get(line) || 0;
+      const tightItem = upP > 0 && downP > 0 && pitch < Math.min(upP, downP) * 0.85;
+      // 条内行距紧的多行目录项，OCR 给的框高常常差很多（13.5 vs 22 像素），字号容差放宽
+      const emTol = tightItem ? 2.0 : continues ? 1.6 : 1.35;
+      if (emOf(line) > emOf(last) * emTol || emOf(line) < emOf(last) / emTol) continue;
+      if (!continues && endsShort(last, line, margin.get(last)!)) continue;
+      // 短条目：目录、菜单、侧栏里一条一行，整片都窄，右边界判断不出来。
+      // 正常折行的正文一行远不止 5 个词；拉丁文字才用这条（中日韩不按空格分词）。
+      // 下一行也短才算：下一行是长句时，上一行多半是标题折了行（“Huge crowds greet / Pope in Paris for…”）
+      // 字号明显大于正文的是标题，标题折行常常每行只有几个词，不按短条目切
+      if (!continues && !tightItem && isLatin(last.text) && lastWords <= 5 && line.text.trim().split(/\s+/).length <= 5
+        && Math.min(emOf(last), emOf(line)) < bodyEm * 1.3) continue;
+      // 段间距：本段已经有两行以上时，新行的行距要和本段自己的行距一致——
+      // 段落之间只多出小半行，按固定倍数卡不住，按本段自己的节奏一比就出来了。
+      // 句子明显没说完（上面 continues）时不看节奏：段落最后一行几乎总是以句号收尾，
+      // 行框被上标、括号撑高带来的行距误差也就不会把一句话切开
+      const g = groups[i];
+      const tol = 1.12;
+      if (continues) { /* 同一句话，照接 */ } else if (g.length >= 2) {
+        const ps = g.slice(1).map((l, k) => (l.y + l.height / 2) - (g[k].y + g[k].height / 2)).sort((a, b) => a - b);
+        const ownPitch = ps[Math.floor(ps.length / 2)];
+        if (ownPitch > 0 && pitch > ownPitch * tol + 2) continue;
+      } else {
+        // 本段只有一行时，拿"新行和它下一行"的行距当参照：新行如果是下一段的开头，
+        // 它和自己段里下一行的行距就是那一段的节奏，这里明显更宽就是段距
+        const down = downPitch.get(line);
+        if (down && pitch > down * tol + 2) continue;
+        if (!down && singlePitch && pitch > Math.max(singlePitch * 1.25, 1.75) * emMin) continue;
+      }
       if (LIST_MARKER.test(line.text)) continue;
       // 字重不同不是同一段：粗体小标题后面紧跟正文、正文后面紧跟粗体标签。
       // 粗体的笔画大约是常规体的 1.5 倍，两者之间取 1.25 倍为界；量不出来的行不参与。
-      if (last.weight && line.weight && Math.max(last.weight, line.weight) > Math.min(last.weight, line.weight) * 1.25) continue;
+      // 句子没说完时不看字重（首句开头的粗体词）；但只有两三个词的粗体小标签（“Next topic”）后面跟链接，照样分开
+      if (!(continues && lastWords > 5) && last.weight && line.weight && Math.max(last.weight, line.weight) > Math.min(last.weight, line.weight) * 1.25) continue;
       // 左边缘对齐是"同一段"的常见特征，但密排正文里 OCR 常把一行的开头单独切走，
       // 剩下的那块就从半路开始，左边缘对不上，整段被拆得七零八落、还互相压着画。
       // 所以左边缘对不上时再看"横向是否落在同一栏"：两行的横向区间大幅重叠也算同段。
@@ -357,11 +451,56 @@ function groupLinesIntoParagraphs(lines: TextBlock[]): ParagraphBlock[] {
       lineHeight: medianHeight(group),
       lineCount: group.length,
       weight: lineWeight(group),
+      members: group.flatMap(l => l.members || [l]),
       ...mergeInk(group),
     };
   });
 }
 
+
+/// 这一行最左边那块的左侧紧挨着一个识别时拿掉的图标（›、•、▸）。
+/// 字框本身多出来的空白也记在 icons 里，但它和字是贴着的（空当 0），不算
+function leadIcon(l: TextBlock): boolean {
+  const parts = l.members || [l];
+  const first = parts.reduce((a, b) => (a.x <= b.x ? a : b));
+  const em = emOf(l);
+  return !!first.icons?.some(ic => ic.x + ic.width < first.x - 2 && first.x - (ic.x + ic.width) < em * 1.5
+    && ic.y < first.y + first.height && ic.y + ic.height > first.y);
+}
+
+function isLatin(t: string): boolean {
+  return /\p{L}/u.test(t) && !/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(t);
+}
+
+/// 一行到它正下方下一行（横向重叠、字号相近、底色一样）的行距，找不到返回 0
+/// 往上一行的行距（同一栏、字号相近），没有就是 0
+function prevLinePitch(line: TextBlock, sorted: TextBlock[], maxEm = 1.9): number {
+  const cy = line.y + line.height / 2;
+  let best = 0;
+  for (const o of sorted) {
+    const p = cy - (o.y + o.height / 2);
+    if (p < emOf(line) * 0.5 || p > emOf(line) * maxEm) continue;
+    const overlapX = Math.min(line.x + line.width, o.x + o.width) - Math.max(line.x, o.x);
+    if (overlapX <= 0 || differentBg(line, o)) continue;
+    if (emOf(o) > emOf(line) * 1.6 || emOf(o) < emOf(line) * 0.62) continue;
+    if (!best || p < best) best = p;
+  }
+  return best;
+}
+
+function nextLinePitch(line: TextBlock, sorted: TextBlock[], maxEm = 1.9): number {
+  const cy = line.y + line.height / 2;
+  let best = 0;
+  for (const o of sorted) {
+    const p = o.y + o.height / 2 - cy;
+    if (p < emOf(line) * 0.5 || p > emOf(line) * maxEm) continue;
+    const overlapX = Math.min(line.x + line.width, o.x + o.width) - Math.max(line.x, o.x);
+    if (overlapX <= 0 || differentBg(line, o)) continue;
+    if (emOf(o) > emOf(line) * 1.6 || emOf(o) < emOf(line) * 0.62) continue;
+    if (!best || p < best) best = p;
+  }
+  return best;
+}
 
 /// 这一页的单倍行距（行距 ÷ 字高）。段落之间常常不空整行，只多出半行左右的段间距，
 /// 拿固定倍数去卡分不开；但同一页里总有挨着排的行（段内的续行、信头、列表），
@@ -373,11 +512,11 @@ function singleSpacingRatio(sorted: TextBlock[]): number {
     for (let j = i - 1; j >= 0; j--) {
       const prev = sorted[j];
       const pitch = (line.y + line.height / 2) - (prev.y + prev.height / 2);
-      const h = Math.max(prev.height, line.height);
+      const h = Math.max(emOf(prev), emOf(line));
       if (pitch < h * 0.5) continue;
       if (pitch > h * 3) break;
       const overlapX = Math.min(line.x + line.width, prev.x + prev.width) - Math.max(line.x, prev.x);
-      if (overlapX <= 0 || prev.height > line.height * 1.25 || line.height > prev.height * 1.25) continue;
+      if (overlapX <= 0 || emOf(prev) > emOf(line) * 1.25 || emOf(line) > emOf(prev) * 1.25) continue;
       ratios.push(pitch / h);
       break;
     }
@@ -412,24 +551,37 @@ function endsShort(last: TextBlock, next: TextBlock, marginRight: number): boole
 /// 高位数会落在"普通说明文字的宽度"上而不是右边界。以前担心个别被拼宽的行把边界顶上去，
 /// 现在不同窗口、不同栏的字已经先分开了，同一块文字里不会再有这种行。
 function rightMargin(line: TextBlock, lines: TextBlock[]): number {
+  // 只看上下几行之内的：正文旁边有浮动的图框、信息框时，折行宽度是一段一段变的，
+  // 拿整栏最宽的一行（比如框上方跨满全宽的那行）来比，框旁边的每一行都会被判成"提前换行"
+  const cy = line.y + line.height / 2;
   const rights = lines
-    .filter(o => Math.abs(o.x - line.x) <= line.height * 1.5
+    .filter(o => Math.abs(o.y + o.height / 2 - cy) <= line.height * 15)
+    .filter(o => Math.abs(o.x - line.x) <= line.height * 1.2
       && o.height < line.height * 1.5 && o.height > line.height * 0.66)
     .map(o => o.x + o.width)
     .sort((a, b) => a - b);
-  return rights.length ? Math.max(line.x + line.width, rights[rights.length - 1]) : line.x + line.width;
+  // 取第二宽的：挡掉个别跨满全宽的行（框上方那行、提示行），又不会被一串短条目带短
+  const edge = rights.length >= 3 ? rights[rights.length - 2] : rights[rights.length - 1];
+  return rights.length ? Math.max(line.x + line.width, edge) : line.x + line.width;
 }
 
 /// Vision 偶尔会把一行只认出半个字高——框高只有整屏行高中位数的一半，
 /// 认出来的字也跟着缺一半：reflow it, measure it, or translate it ... 会变成
 /// "ret low 1t. measure lt. or translate lt as a sınole unıt ratner tan quessına"。
 /// 这种半高框翻出来必然是乱码，贴上去比留着原文更难看，直接丢掉。
-/// 阈值取整屏行高中位数的 0.6 倍：正常的小字号说明文字不会小到正文的六成以下，
-/// 真掉了一两块小字也比贴一行乱码强。渲染层还另有一个字号下限兜底。
+/// 判据：同一行上紧挨着一个比它高得多（1.67 倍以上）的块——同一行的字本来一样高。
 export function dropUndersizedBoxes(blocks: TextBlock[]): TextBlock[] {
-  if (blocks.length < 6) return blocks;
-  const median = medianHeight(blocks);
-  return blocks.filter(b => b.height >= median * 0.6);
+  // 只和同一行、挨着的块比：以前拿整屏行高中位数比，大字多的页面（博客、营销页）上
+  // 一排正常的小号导航会被整排当成"半高框"丢掉
+  return blocks.filter(b => !blocks.some(o => {
+    if (o === b || o.height * 0.6 <= b.height) return false;
+    const oc = o.y + o.height / 2, bc = b.y + b.height / 2;
+    if (Math.abs(oc - bc) > o.height * 0.5) return false;
+    const gap = Math.max(o.x, b.x) - Math.min(o.x + o.width, b.x + b.width);
+    // 认坏的半截框要么认得没把握，要么和整行紧贴着；
+    // 离得远、认得有把握的是正常的小字（大号 logo 旁边的导航、侧栏目录挨着带上标的正文）
+    return gap < o.height * 3 && (b.confidence < 0.9 || gap < o.height * 0.5);
+  }));
 }
 
 /// OCR 对同一片像素偶尔会多吐一个"糊在一起"的框：字是错的、高度跨了两行，
@@ -492,9 +644,10 @@ export function dropOversizedBoxes(blocks: TextBlock[]): TextBlock[] {
     return !blocks.some(other => {
       if (other === b) return false;
       if (rectOverlapRatio(b, other) > 0.5) return true;
-      // 内容判据：这个大框把别的块的整句都吞了进去，说明它是几行糊在一起的复合框
+      // 内容判据：这个大框把压在它身上的别的块的整句都吞了进去，说明它是几行糊在一起的复合框。
+      // 得真的压在一起：页面别处（目录、面包屑）出现同一句话，不算
       const otherText = other.text.replace(/\s+/g, ' ').trim();
-      return otherText.length >= 12 && bText.includes(otherText);
+      return otherText.length >= 12 && bText.includes(otherText) && rectOverlapRatio(b, other) > 0;
     });
   });
 }
@@ -581,14 +734,22 @@ export function normalizeOcrText(text: string): string {
   const latin = (t.match(/[A-Za-z]/g) || []).length;
   const cyr = (t.match(/[\u0400-\u04ff]/g) || []).length;
   if (cyr && latin >= cyr) t = t.replace(/[\u0400-\u04ff]/g, ch => HOMOGLYPH[ch] ?? ch);
+  // Vision 常把 AI 认成 Al（I 和小写 l 同形）：“AI development”→“Al development”→被翻成“铝开发”。
+  // 现在网页上 AI 远比人名 Al 常见；带连字符的（Al-Kindi 这类阿拉伯人名）不动
+  t = t.replace(/\bAl(s?)\b(?!-)/g, 'AI$1').replace(/([a-z])Al\b(?!-)/g, '$1AI');
+  // OCR 在文件名、网址的点后面插空格："hello. py"、"www. apache . org"、"httpd. conf"：合回去，
+  // 不然翻译把它当成两句话（"hello。Py"）。只认常见的扩展名、顶级域名（全小写）
+  t = t.replace(/\b([\w-]+)\s?\.\s(?=(?:py|js|ts|jsx|tsx|html?|css|json|conf|cfg|md|txt|rb|rs|go|sh|yml|yaml|toml|xml|php|java|kt|org|com|net|io|dev|edu|gov)\b)/g, '$1.')
+    .replace(/\bwww\.\s(?=[a-z])/g, 'www.');
   t = t.replace(/\b[0-9A-Fa-fOo]{1,4}(?::[0-9A-Fa-fOo]{0,4}){2,7}\b:*/g, m => /\d/.test(m) ? m.replace(/[Oo]/g, '0') : m);
   return t;
 }
 
-/// 词尾的下拉箭头、"›" 被认成了字母："Products v"、"Resources v"、"GET STARTED >"。
+/// 词尾单独一个箭头符号（下拉的 ⌄、"›"、"GET STARTED >"）。只认符号本身：
+/// 箭头被 Vision 认成字母（v、y）的情况分不清是不是真字母，不处理。
 /// 去掉它，框也按字数比例收回来一截，箭头本身就不会被擦掉。
 export function stripTrailingIcon(b: TextBlock): TextBlock {
-  const m = b.text.match(/^(.*\p{L}{2,}.*?)\s+(?:[vy~>›»⌄˅˄⌃∨•·]|>>|»»)$/u);
+  const m = b.text.match(/^(.*\p{L}{2,}.*?)\s+(?:[>›»⌄˅˄⌃∨•·]|>>|»»)$/u);
   if (!m) return b;
   const kept = m[1].trimEnd();
   const width = b.width * Math.min(1, (kept.length + 0.5) / b.text.length);
@@ -597,21 +758,66 @@ export function stripTrailingIcon(b: TextBlock): TextBlock {
 
 /// 代码、命令、JSON 的一行。翻出来没有意义，还会把键名翻成中文。
 export function isCodeLine(text: string): boolean {
-  const t = text.trim();
+  // Vision 常把代码里的 < > 认成 ‹ ›（U+2039/203A），先换回来
+  const t = text.trim().replace(/‹/g, '<').replace(/›/g, '>');
   if (!t) return false;
+  // Python 导入、装饰器："from flask import Flask"、"import numpy as np"、"@app.route("/")"
+  if (/^from\s+[\w.]+\s+import\s+[\w*]/.test(t) || /^import\s+[\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+)*;?$/.test(t)) return true;
+  if (/^@[a-z_][\w.]*\s*\(/.test(t.replace(/\.\s+/g, '.'))) return true;
+  // 模板语法：Svelte/Handlebars 的 {#if …}、{@html …}、{/each}（OCR 常把 { 认成 ¿ ¡ ｛ 、）
+  if (/^[{｛¿¡、]\s?[#@:\/][a-z]+\b/.test(t)) return true;
+  // 半截的标签：<script lang="ts">、</style>、/script>
+  if (/^<\/?[a-z][\w-]*(?:\s[^<>]*)?>$/i.test(t) || /^\/[a-z]+>$/.test(t)) return true;
+  // 交互式解释器提示符：irb(main):001:0>、pry(main)>
+  if (/^\w+\(\w+\)\s?(?::\s?\d+)*\s?[>*]/.test(t)) return true;
+  // 一串符号（装饰图案、ASCII 画、被认坏的图标行）：字母和汉字不到四成
+  { const vis = t.replace(/\s/g, ''); const letters = (vis.match(/[\p{L}]/gu) || []).length;
+    if (vis.length >= 8 && letters < vis.length * 0.4 && !/\p{L}{4,}/u.test(t)) return true; }
+  // CSS 数值一行："2em;"、"16px;"、"#fff;"
+  if (/^(?:-?[\d.]+(?:px|em|rem|%|vh|vw|s|ms)?|#[0-9a-f]{3,8})\s*;$/i.test(t)) return true;
+  // 小写工具名 + 常见子命令："bun init"、"deno run main.ts"、"npx create-x"（最多五个词）
+  if (/^[a-z][\w-]*\s+(?:init|install|i|run|test|build|create|add|remove|rm|dev|start|serve|deploy|upgrade|update|publish|exec|x|new|generate|login|link|pull|push|compile|fmt|lint|check|doctor)(?:\s+[\w@./:=-]+){0,3}$/.test(t)
+    && !/^(?:please|then|and|or|to|we|you|they|it|i)\s/i.test(t)) return true;
+  // 小写命令后面紧跟命令行选项："nginx -s reload"、"systemctl --user start x"
+  if (/^[a-z][\w.-]*\s+-{1,2}[a-zA-Z][\w-]*(?:\s|=|$)/.test(t) && !/\s\p{Ll}+\s\p{Ll}+\s\p{Ll}+\s\p{Ll}+\s\p{Ll}+/u.test(t)) return true;
   if (/^(\/\/|#!|```|<\/?[a-z][\w-]*[ >])/i.test(t)) return true;
   if (/^[{}\[\]();,:\s]+$/.test(t)) return true;
   // JSON / YAML：键加冒号。OCR 常把引号认丢，所以引号可有可无，但键名得像个标识符
-  if (/^["'“”‘’]{0,3}[A-Za-z_$][\w$.-]*["'“”‘’]{0,3}\s*:\s*(["'“”{\[]|-?\d|true|false|null|t\}|\{|$)/.test(t)) return true;
+  // 不带引号、大写开头的一个词加冒号（"Imports: 44"、"Version: 2"）是界面标签，不算
+  if (/^["'“”‘’]{0,3}[A-Za-z_$][\w$.-]*["'“”‘’]{0,3}\s*:\s*(["'“”{\[]|-?\d|true|false|null|t\}|\{|$)/.test(t)
+    && !/^[A-Z][a-z]+\s*:\s*(?:-?[\d,.]+|$)/.test(t)) return true;
   if (/^["'“”‘’]{1,3}[\w$ .-]+["'“”‘’]{1,3}\s*:/.test(t)) return true;
-  // 面包屑路径："Macintosh HD › 用户 › yxy › Claude"
-  if ((t.match(/\s[>›»]\s/g) || []).length >= 2) return true;
+  // CSS 声明、行内样式："grid: auto-flow / 1fr 1fr;"、"color: red;"
+  if (/^[a-z-]+\s*:\s*[^;:]+;\s*$/.test(t)) return true;
   // 命令行（含 "yxy@MacBook ~ % ls" 这种带提示符的）
-  if (/^[$%>❯]\s*\S/.test(t)) return true;
+  if (/^[$%>❯›»▸]\s*\S/.test(t) && /^[$%>❯›»▸]\s*(?:[a-z][\w.-]*)(?:\s|$)/.test(t)) return true; // 提示符后面跟着小写命令名
   if (/^[\w.-]+@[\w.-]+(?::\S*)?\s*\S*\s*[%$#]\s/.test(t)) return true;
   if (/(?:^|\s)[~\/][^\s]*\s?[%$#]\s+\S/.test(t)) return true; // "MacBook ~% ls"：@ 被认成别的字也能认出提示符
   if (/^(?:\/[\w.\-\u4e00-\u9fff]+){2,}/.test(t) && !/\s\w+\s\w+\s\w+/.test(t)) return true; // 以路径开头的一行
-  if (/^(?:git|npm|npx|pnpm|yarn|pip3?|python\d*|node|curl|wget|brew|cd|ls|sudo|docker|kubectl|cargo|go|swift|make|ssh|scp|chmod|mkdir|rm|cp|mv|cat|echo|export)\s+[-\w./:~$"']/.test(t)) return true;
+  // 命令名后面跟的是普通词（"npm package manager"、"git is a …"）是一句话，不是命令
+  if (/^(?:git|npm|npx|pnpm|yarn|pip3?|python\d*|node|curl|wget|brew|cd|ls|sudo|docker|kubectl|cargo|go|swift|make|ssh|scp|chmod|mkdir|rm|cp|mv|cat|echo|export)\s+[-\w./:~$"']/.test(t)
+    && !/^\S+\s+(?:is|are|was|and|or|the|a|an|to|for|with|package|packages|manager|repository|repositories|version|versions|commands?|registry|projects?|users?|team|docs|documentation|website|community|book|basics|tutorial|guide)\b/i.test(t)) return true;
+  // SQL：关键字开头，后面跟着 FROM/INTO/SET/TABLE/WHERE/VALUES 之类（“SELECT * FROM weather;”）
+  if (/^(?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|WITH|GRANT)\b/i.test(t)
+    && /\b(?:FROM|INTO|SET|TABLE|WHERE|VALUES|AS|INDEX|VIEW|ON)\b/.test(t)) return true;
+  // 交互式提示符：Python 的 >>> 和 ...，Jupyter 的 In [1]:
+  if (/^(?:>>>|\.\.\.)\s/.test(t) || /^In \[\d*\]:/.test(t)) return true;
+  // 配置行：key = "值" / key = 1.0 / key = [ / key = {（Cargo.toml、ini、shell 变量）
+  if (/^[A-Za-z_][\w.-]*\s*=\s*(?:["'\[{]|\d|true\b|false\b)/.test(t) && !/\s\w+\s\w+\s\w+\s\w+/.test(t.replace(/"[^"]*"/g, ''))) return true;
+  // 命令行选项：“-a, --all”“--color=auto”
+  if (/^-{1,2}[A-Za-z][\w-]*(?:[=,]\S*)?(?:,?\s+-{1,2}[A-Za-z][\w-]*(?:=\S*)?)*$/.test(t)) return true;
+  // 语句：以 ; { } 结尾，又带括号、:: 或 = （“setup() {”“use serde::{Deserialize};”“return { count: ref(0) }”）
+  if (/[;{}]\s*$/.test(t) && /[()]|::|=|=>/.test(t) && !/\s\p{Ll}+\s\p{Ll}+\s\p{Ll}+\s\p{Ll}+\s/u.test(t)) return true;
+  // 方法调用、属性访问：“message.toLowerCase();”“r.headers['content-type']”
+  if (/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\s*(?:\(|\[)/.test(t)) return true;
+  // 属性、注解、预处理：#[derive(...)]、@Override、#include
+  if (/^#\[[\w:]+|^@[A-Z]\w+(?:\(|$)|^#(?:include|define|if|ifdef|pragma)\b/.test(t)) return true;
+  // 一行里有成对的 HTML 标签：“<button>I'm a button</button>”
+  if (/<([a-z][\w-]*)\b[^>]*>.*<\/\1>/i.test(t)) return true;
+  // 数据行：整行被引号、花括号、方括号包着（程序输出的 JSON、字符串）
+  if (/^['"{\[(].*['"}\])],?$/.test(t) && /[:,=]/.test(t) && t.length >= 6 && (/^\{/.test(t) || /['"]/.test(t))) return true;
+  // 表格输出的分隔线：“----+------”
+  if (/^[-+=|\s]{4,}$/.test(t) && /[-=]{3}/.test(t)) return true;
   // 程序语句
   if (/^(?:export\s+)?(?:const|let|var|func|function|def|class|struct|enum|import|from|return|public|private|static|#include|using|package)\s+\S/.test(t)
     && /[=(){};:<>]/.test(t)) return true;
@@ -627,11 +833,15 @@ export function isIdentifier(text: string): boolean {
   if (/^[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}(?:\/\d+)?$/i.test(t) && /\d/.test(t)) return true; // IPv6
   if (/^AS\d{1,10}$/i.test(t)) return true;
   if (/^(?:https?|ftp|file|ssh|git):\/\/\S+$/i.test(t)) return true;
-  if (/^(?:www\.)?[\w-]+(?:\.[\w-]+)+(?:\/\S*)?$/i.test(t) && /\.[a-z]{2,}(?:\/|$)/i.test(t) && !/\s/.test(t)) return true; // 域名、路径
+  // "Node.js"、"Next.js"、"Vue.js"：大写开头的 .js/.ts 是产品名，不是域名（交给翻译那边的专名表保留）
+  if (/^(?:www\.)?[\w-]+(?:\.[\w-]+)+(?:\/\S*)?$/i.test(t) && /\.[a-z]{2,}(?:\/|$)/i.test(t) && !/\s/.test(t)
+    && !/^[A-Z][\w-]*\.(?:js|ts)$/.test(t)) return true; // 域名、路径
   if (/^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$/.test(t)) return true;
   if (/^v?\d+(?:\.\d+){1,3}(?:[-+][\w.-]+)?$/.test(t)) return true;
-  if (/^[.…]*[\p{L}\p{N}_ -]*\.(?:js|ts|tsx|jsx|py|swift|m|h|c|cpp|go|rs|rb|java|kt|json|ya?ml|toml|md|txt|csv|log|sh|command|zsh|bash|app|zip|dmg|pkg|tgz|gz|png|jpe?g|gif|svg|pdf|html?|css|docx?|xlsx?|pptx?)$/iu.test(t)) return true; // 文件名
+  if (!/^[A-Z][\w-]*\.(?:js|ts)$/.test(t) && /^[.…]*[\p{L}\p{N}_ -]*\.(?:js|ts|tsx|jsx|py|swift|m|h|c|cpp|go|rs|rb|java|kt|json|ya?ml|toml|md|txt|csv|log|sh|command|zsh|bash|app|zip|dmg|pkg|tgz|gz|png|jpe?g|gif|svg|pdf|html?|css|docx?|xlsx?|pptx?)$/iu.test(t)) return true; // 文件名
   if (/^[.…]+[\p{L}\p{N}_-]+$/u.test(t)) return true; // 被截断的名字："...command"
+  if (/^\.[\w.-]+$/.test(t)) return true; // 点开头的文件、文件夹：.github、.editorconfig
+  if (/^[\w.-]*\/[\w.\/-]+$/.test(t) && !/\s/.test(t)) return true; // 路径：src/main、.agents/skills
   if (/^[a-z]+(?:_[a-z0-9]+)+$/.test(t)) return true; // snake_case
   if (/^[a-z]+(?:[A-Z][a-z0-9]+)+$/.test(t) && t.length >= 6) return true; // camelCase
   return false;
@@ -643,23 +853,87 @@ export function looksLikeLogo(b: TextBlock, medianH: number): boolean {
   const t = b.text.trim();
   if (!t || /\s/.test(t)) return false;
   if (b.confidence <= 0.55 && medianH > 0 && b.height >= medianH * 2.2) return true;
-  if (/^[A-Z]{2,}[a-z]{2,}$/.test(t) || /^[A-Z][a-z]+[A-Z][a-z]+$/.test(t) || /^[a-z][A-Z][a-z]{2,}$/.test(t)) return true;
+  // 大小写混写的专名（GitHub、WebAssembly）不再在这里扔掉：扔掉了分段就少一截（"Node.js with / WebAssembly"），
+  // 翻译时专名规则会把它遮住、原样带回来，原样的不画也不擦
   return false;
 }
 
-/// 代码块里夹着一两行没被认出来的（引号认歪了、只剩半截）：上下左右挨着的几行多数是代码、
-/// 底色也一样，它也算代码。只看同一片底色里、上下三行以内、横向有重叠的邻居。
+/// 一列代码、文件名、CSS 属性名里夹着几个单看像普通单词的（"gap"、"height"、"build"、"test"）：
+/// 上下挨着的几行有一半以上是代码或标识，它也算。
+/// 投票时把"有点像标识"的也算上（带连字符的小写词 grid-template-rows、单个小写词），
+/// 但它们自己不单独成立——单独一个 "sign-in" 按钮还是要翻。
 export function spreadCode(blocks: TextBlock[], isCode: (b: TextBlock) => boolean): Set<TextBlock> {
+  const kebab = (b: TextBlock) => /^[a-z][a-z0-9]*(?:-[a-z0-9*]+)+\s*[*A]?$/.test(b.text.trim().replace(/^[›>•·]\s*/, ''));
+  const neighbors = (b: TextBlock) => blocks.filter(o => o !== b
+    && Math.abs((o.y + o.height / 2) - (b.y + b.height / 2)) < Math.max(o.height, b.height) * 3.5
+    && Math.min(o.x + o.width, b.x + b.width) - Math.max(o.x, b.x) > 0
+    && !differentBg(o, b));
   const code = new Set(blocks.filter(isCode));
+  // 语法高亮把一行代码按颜色切成好几块（from / flask / import / Flask），单看每块都不像代码。
+  // 同一行、同底色、挨着的块拼回一整行再判断一次，是代码就整行都算
+  const rows: TextBlock[][] = [];
+  for (const b of [...blocks].sort((p, q) => (p.y - q.y) || (p.x - q.x))) {
+    const cy = b.y + b.height / 2;
+    const row = rows.find(r => {
+      const last = r[r.length - 1];
+      return Math.abs((last.y + last.height / 2) - cy) < Math.min(last.height, b.height) * 0.5
+        && b.x - (last.x + last.width) < Math.max(last.height, b.height) * 2.5 && b.x >= last.x && !differentBg(last, b);
+    });
+    if (row) row.push(b); else rows.push([b]);
+  }
+  for (const r of rows) {
+    if (r.length < 2) continue;
+    const joined = r.map(b => b.text.trim()).join(' ');
+    if (isCodeLine(joined) || isCodeLine(joined.replace(/\s*([.(),:=])\s*/g, '$1'))) r.forEach(b => code.add(b));
+  }
+  // 一列里好几个挨着的连字符小写词（grid-template-rows、hanging-punctuation）就是一列属性名/参数名
+  for (const b of blocks) if (kebab(b) && neighbors(b).filter(kebab).length >= 2) code.add(b);
   if (!code.size) return code;
-  for (const b of blocks) {
-    if (code.has(b)) continue;
-    const near = blocks.filter(o => o !== b
-      && Math.abs((o.y + o.height / 2) - (b.y + b.height / 2)) < Math.max(o.height, b.height) * 3.5
-      && Math.min(o.x + o.width, b.x + b.width) - Math.max(o.x, b.x) > 0
-      && !differentBg(o, b));
-    const n = near.filter(o => code.has(o)).length;
-    if (near.length >= 2 && n * 3 >= near.length * 2) code.add(b);
+  // 代码框：底色和页面主底色不同的一整块（<pre> 块），里面有 2 行以上确定是代码时，整块都算代码
+  // （psql 的输出、变量名、注释都跟着不翻）。框里的块按"同底色、上下挨着、横向重叠"连成一片。
+  const bgKey = (b: TextBlock) => (b.bg || []).map(v => Math.round(v / 12)).join(',');
+  const counts = new Map<string, number>();
+  for (const b of blocks) counts.set(bgKey(b), (counts.get(bgKey(b)) || 0) + 1);
+  const pageBg = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const seen = new Set<TextBlock>();
+  for (const seed of blocks) {
+    if (seen.has(seed) || !seed.bg || bgKey(seed) === pageBg) continue;
+    const region: TextBlock[] = [seed];
+    seen.add(seed);
+    for (let k = 0; k < region.length; k++) {
+      const a = region[k];
+      for (const o of blocks) {
+        if (seen.has(o) || differentBg(a, o) || bgKey(o) === pageBg) continue;
+        const gapY = Math.max(o.y, a.y) - Math.min(o.y + o.height, a.y + a.height);
+        const overlapX = Math.min(o.x + o.width, a.x + a.width) - Math.max(o.x, a.x);
+        const gapX = -overlapX;
+        if (gapY < Math.max(a.height, o.height) * 1.6 && (overlapX > 0 || gapX < Math.max(a.height, o.height) * 3)) {
+          region.push(o); seen.add(o);
+        }
+      }
+    }
+    // 确定是代码的行要占到四成以上（整片正文里夹两行代码的不算）；普通句子（5 个词以上、不带代码符号）不跟着算
+    const strong = region.filter(b => code.has(b)).length;
+    const prose = (b: TextBlock) => b.text.trim().split(/\s+/).length >= 5 && !/[{}();=<>\[\]]/.test(b.text);
+    if (region.length >= 3 && strong >= 2 && strong >= region.length * 0.4) region.forEach(b => { if (!prose(b)) code.add(b); });
+  }
+  const likeId = (b: TextBlock) => code.has(b) || kebab(b);
+  // 只往"像名字的条目"上传：一个词、没有空格、小写开头（build、src、gap、height）。
+  // 界面上的菜单项、按钮大多大写开头或是几个词（Readme、Code of conduct、Go to file），照常翻；
+  // 一段正文也不会因为挨着代码块被连累。一列里一个传一个，所以反复传到不再变化为止
+  const short = (b: TextBlock) => /^[a-z][\w.*-]*$/.test(b.text.trim().replace(/^[›>•·]\s*/, '').replace(/\s+[*A]$/, ''));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const b of blocks) {
+      if (code.has(b) || !short(b)) continue;
+      // 上一行以 and/or/the/of/with… 收尾：这是那句话折下来的最后一个词（"ES6 and / beyond"），不是代码
+      if (blocks.some(o => o !== b && Math.abs(o.x - b.x) < b.height * 1.5 && b.y - (o.y + o.height) > -3 && b.y - (o.y + o.height) < b.height * 1.2
+        && /\b(?:and|or|the|a|an|of|to|in|on|for|with|by|from|at|as|between|about|into|than|like|using)$/i.test(o.text.trim()))) continue;
+      const near = neighbors(b);
+      const strong = near.filter(o => code.has(o)).length;
+      const votes = near.filter(likeId).length;
+      if (near.length >= 2 && strong >= 1 && votes * 2 >= near.length) { code.add(b); changed = true; }
+    }
   }
   return code;
 }
@@ -697,4 +971,14 @@ export function mergeCutLines(blocks: TextBlock[]): TextBlock[] {
     }
   }
   return out;
+}
+
+/// 从 OCR 框高推这一行的字号（em）。Vision 的框只包住字形本身：
+/// 带下伸字母（g j p q y）的英文约 0.93em，全是大写或没有下伸的约 0.72em，中日韩字约 0.92em。
+/// 浮层画字用的是同一个换算（overlay.js 的 emFromBox）。
+export function emOf(b: TextBlock): number {
+  const t = b.text || '';
+  if (/[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]/.test(t)) return b.height / 0.92;
+  if (/[gjpqy,;]/.test(t)) return b.height / 0.93;
+  return b.height / 0.72;
 }

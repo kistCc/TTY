@@ -54,7 +54,7 @@ export function buildArgs(tool: NativeTool, sourcePath: string, binaryPath: stri
 }
 
 /// 找到某个原生程序：开发时在仓库的 scripts/ 下，打包后在 app 的 Resources/scripts/ 下。
-export function nativePaths(tool: NativeTool | 'layout-macos'): { binaryPath: string; sourcePath: string } {
+export function nativePaths(tool: NativeTool): { binaryPath: string; sourcePath: string } {
   const devPath = path.join(__dirname, '..', '..', 'scripts', tool);
   if (fs.existsSync(devPath) || fs.existsSync(devPath + '.m')) {
     return { binaryPath: devPath, sourcePath: devPath + '.m' };

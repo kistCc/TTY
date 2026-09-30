@@ -6,7 +6,7 @@ import * as nodePath from 'path';
 app.setName('TTY');
 app.setPath('userData', nodePath.join(app.getPath('appData'), 'TTY'));
 import { takeScreenshot } from './screenshot';
-import { listWindows, warmUpDocLayout } from './ocr';
+import { listWindows } from './ocr';
 import { recognizeImage, translateRecognized } from './pipeline';
 import { windowsOnDisplay } from './layout';
 import { getConfig, saveConfig, migrateConfig, applyLoginItem } from './config';
@@ -66,14 +66,6 @@ app.whenReady().then(() => {
   // Hide dock icon — pure tray app, prevents Space switching
   app.dock?.hide();
 
-  // 文档识别模型第一次用要准备很久，启动时在后台先跑一遍
-  try {
-    const { nativeImage } = require('electron');
-    const img = nativeImage.createFromBitmap(Buffer.alloc(200 * 60 * 4, 255), { width: 200, height: 60 });
-    const warm = nodePath.join(require('os').tmpdir(), `tty-warm-${Date.now()}.png`);
-    fs.writeFileSync(warm, img.toPNG());
-    warmUpDocLayout(warm);
-  } catch {}
 
   // Move any existing install off the old chord hotkeys before anything reads them,
   // so the permission-free backend can be used.

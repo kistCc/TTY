@@ -70,7 +70,9 @@ export async function translateWithGoogle(
   const batched = await mapBatchesConcurrent<string>(
     texts, BATCH_SIZE, MAX_CONCURRENCY,
     async (batch) => {
-      const res = await translate(batch, { to: targetLang } as any);
+      // from 缺省让 Google 自己判断；纯汉字的日文词（“非表示”）会被判成中文原样退回，调用方可以指定 from 重翻
+      const from = (_config as any)?.from;
+      const res = await translate(batch, (from ? { from, to: targetLang } : { to: targetLang }) as any);
       const resAny = res as any;
       return Array.isArray(resAny) ? resAny.map((r: any) => r.text) : [resAny.text];
     },

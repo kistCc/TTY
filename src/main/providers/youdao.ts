@@ -192,6 +192,23 @@ async function translateOne(text: string, targetLang: string): Promise<Translate
   };
 }
 
+/// 出错先重试一次（换一把新密钥、稍等一下）：限流、密钥过期多半第二次就好了。
+/// 还是 code=40（有道对这段"不需要翻译/语种不支持"）就原样退回这一条，别让整页失败
+async function translateOneRetry(text: string, targetLang: string): Promise<TranslateOutcome> {
+  try {
+    return await translateOne(text, targetLang);
+  } catch (e: any) {
+    cachedKey = null;
+    await new Promise(r => setTimeout(r, 400));
+    try {
+      return await translateOne(text, targetLang);
+    } catch (e2: any) {
+      if (/code=40\b/.test(String(e2?.message || e2))) return { text, src: text };
+      throw e2;
+    }
+  }
+}
+
 function normalize(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
@@ -204,14 +221,22 @@ export async function translateWithYoudao(
   const to = YOUDAO_LANG_MAP[targetLang];
   if (!to) throw new Error(`有道翻译不支持的目标语言: ${targetLang}`);
 
-  const batched = await mapBatchesConcurrent<string>(
-    texts, BATCH_SIZE, MAX_CONCURRENCY,
-    async (batch) => {
-      if (batch.length === 1) return [(await translateOne(batch[0], to)).text];
+  // 有道偶尔把带重音字母、夹着别的文字的词换成它内部的占位符 <e:1>、<s:1>，不还原就交回来。
+  // 这样的一条单独再翻一次；还是有占位符就交空串（不画、保留原文），别把乱码画上去
+  const LEAK = /<[a-z]:\d+>/;
+  const clean = async (orig: string, out: string): Promise<string> => {
+    if (!LEAK.test(out)) return out;
+    try {
+      const again = (await translateOneRetry(orig, to)).text;
+      return LEAK.test(again) ? '' : again;
+    } catch { return ''; }
+  };
+  const translateBatchRaw = async (batch: string[]): Promise<string[]> => {
+      if (batch.length === 1) return [(await translateOneRetry(batch[0], to)).text];
 
       // 拼成一次请求前先把块内换行压平，否则一个块占多行，回来按行拆就对不上了。
       const sent = batch.map(text => text.replace(/\s*\n\s*/g, ' '));
-      const outcome = await translateOne(sent.join('\n'), to);
+      const outcome = await translateOneRetry(sent.join('\n'), to);
       const lines = outcome.text.split('\n');
       const echoed = outcome.src.split('\n');
 
@@ -229,11 +254,14 @@ export async function translateWithYoudao(
       // 逐条重翻时一条失败不能把整批拖下水，否则那一批全部退回原文。
       const one: string[] = [];
       for (const text of batch) {
-        try { one.push((await translateOne(text, to)).text); }
+        try { one.push((await translateOneRetry(text, to)).text); }
         catch (e) { console.error('[Youdao] 单条翻译失败:', e); one.push(''); }
       }
       return one;
-    },
+  };
+  const batched = await mapBatchesConcurrent<string>(
+    texts, BATCH_SIZE, MAX_CONCURRENCY,
+    async (batch) => Promise.all((await translateBatchRaw(batch)).map((out, i) => clean(batch[i], out))),
     (err, batch) => {
       // 密钥过期会让在途的请求一起失败，作废后下一批自然会重新取。
       cachedKey = null;
