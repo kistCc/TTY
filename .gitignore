@@ -33,8 +33,9 @@ scripts/translate-macos
 # 非运行必需（文件保留在本地，不进仓库）
 CLAUDE.md
 README_EN.md
-# docs/ 里只有 README 用到的演示图进仓库，其它本地文档不进
+# docs/ 里只有 README 用到的演示图和改动详情进仓库，其它本地文档不进
 docs/*
 !docs/demo-before.png
 !docs/demo-after.png
+!docs/改动详情.md
 scripts/ocr-macos.swift
