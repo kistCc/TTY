@@ -8,10 +8,10 @@ import * as fs from 'fs';
 // （复制、解包都可能造成），运行时就会照着这份参数重编一次。参数但凡漏一个
 // framework，链接就失败，整条功能跟着断，用户看到的还是 clang 的原始报错。
 
-export type NativeTool = 'ocr-macos' | 'hotkey-macos' | 'axtext-macos' | 'translate-macos';
+export type NativeTool = 'ocr-macos' | 'hotkey-macos' | 'axtext-macos' | 'translate-macos' | 'live-macos';
 
-/// 用 Swift 写的程序（系统翻译只有 Swift 接口），用 swiftc 编译，源码后缀 .swift
-const SWIFT_TOOLS = new Set<NativeTool>(['translate-macos']);
+/// 用 Swift 写的程序（系统翻译、实时截图只有 Swift 接口），用 swiftc 编译，源码后缀 .swift
+const SWIFT_TOOLS = new Set<NativeTool>(['translate-macos', 'live-macos']);
 const sourceExt = (tool: NativeTool) => SWIFT_TOOLS.has(tool) ? '.swift' : '.m';
 const compilerOf = (tool: NativeTool) => SWIFT_TOOLS.has(tool) ? 'swiftc' : 'clang';
 
@@ -50,6 +50,7 @@ const FRAMEWORKS: Record<NativeTool, string[]> = {
   'hotkey-macos': ['Foundation', 'Carbon', 'AppKit'],
   'axtext-macos': ['Foundation', 'AppKit', 'ApplicationServices'],
   'translate-macos': [],
+  'live-macos': [],
 };
 
 export function buildArgs(tool: NativeTool, sourcePath: string, binaryPath: string): string[] {

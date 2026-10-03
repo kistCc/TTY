@@ -14,7 +14,7 @@ const I18N = {
   en: {
     hotkeyTranslate: 'Full Screen', hotkeyRegion: 'Region',
     hotkeyDismiss: 'Dismiss', hotkeyCache: 'Cache',
-    hotkeyText: 'Selection', hotkeyInput: 'Type to Translate',
+    hotkeyText: 'Selection', hotkeyInput: 'Type to Translate', hotkeyLive: 'Live Translate',
     hotkeyCopyImage: 'Copy Sticker', hotkeyCopyText: 'Copy Text', hotkeyPeek: 'Hold for Original',
     startup: 'Startup', openAtLogin: 'Launch at login',
     sticker: 'Sticker', autoFocusSticker: 'Select sticker after translating',
@@ -35,7 +35,7 @@ const I18N = {
   zh: {
     hotkeyTranslate: '全屏翻译', hotkeyRegion: '选区翻译',
     hotkeyDismiss: '关闭浮层', hotkeyCache: '缓存',
-    hotkeyText: '划词翻译', hotkeyInput: '输入翻译',
+    hotkeyText: '划词翻译', hotkeyInput: '输入翻译', hotkeyLive: '实时翻译',
     hotkeyCopyImage: '复制贴图', hotkeyCopyText: '复制译文', hotkeyPeek: '看原文（按住）',
     startup: '启动', openAtLogin: '开机自启',
     sticker: '贴图', autoFocusSticker: '翻译后自动选中贴图',
@@ -222,6 +222,7 @@ async function doSave() {
     cacheKey: hotkeyValue('cacheKey') || 'shift+s',
     textKey: hotkeyValue('textKey') || 'alt+d',
     inputKey: hotkeyValue('inputKey') || 'alt+c',
+    liveKey: hotkeyValue('liveKey') || 'alt+l',
     copyImageKey: hotkeyValue('copyImageKey') || 'cmd+c',
     copyTextKey: hotkeyValue('copyTextKey') || 'shift+cmd+c',
     peekKey: hotkeyValue('peekKey') || 'space',
@@ -329,6 +330,7 @@ window.api.getConfig().then(config => {
   setHotkeyField('cacheKey', config.cacheKey || 'shift+s');
   setHotkeyField('textKey', config.textKey || 'alt+d');
   setHotkeyField('inputKey', config.inputKey || 'alt+c');
+  setHotkeyField('liveKey', config.liveKey || 'alt+l');
   setHotkeyField('copyImageKey', config.copyImageKey || 'cmd+c');
   setHotkeyField('copyTextKey', config.copyTextKey || 'shift+cmd+c');
   setHotkeyField('peekKey', config.peekKey || 'space');

@@ -173,6 +173,37 @@ static long underlineRow(const uint8_t *rgba, size_t W, size_t H, long x0, long 
     return -1;
 }
 
+/// 从 (x, y) 起往 dir（-1 左、+1 右）量这一行字色连着延伸多长。断开不超过 2 像素的（抗锯齿、虚线）不算断
+static long inkRun(const uint8_t *rgba, size_t W, long y, long x, int dir, RGB ink, double tol, long maxLen) {
+    long len = 0, gap = 0;
+    for (long i = 0; i < maxLen; i++) {
+        long xx = x + dir * i;
+        if (xx < 0 || xx >= (long)W) break;
+        if (colorDist(ink, rgba + (y * W + xx) * 4) < tol) { len = i + 1; gap = 0; }
+        else if (++gap > 2) break;
+    }
+    return len;
+}
+
+/// 找到的"下划线"其实是按钮、输入框、色块的边，不是这行字的下划线：
+/// 1. 线下面接着一大片同色（厚度超过 6 像素）：底下换了一块颜色（按钮外面的浅色底、侧栏下一格的深色底）；
+/// 2. 从整行字的一头往外还连着延伸超过一个字高：输入框、标题下面的横线；
+/// 3. 两头都往外伸出三分之一个字高以上：胶囊按钮、小标签的边框。
+/// 真的下划线到字的两头就停了。字旁边同色的图标（播放按钮、侧栏按钮）和字之间隔着空白，量延伸时断开了，不算。
+/// lx0、lx1 是整行字笔画的左右边，h 是字高
+static BOOL isBoxEdge(const uint8_t *rgba, size_t W, size_t H, long y, long lx0, long lx1, long h, RGB ink, RGB bg) {
+    double tol = MAX(40, rgbDist(ink, bg) * 0.35);
+    long t = 0;
+    while (t < 7 && y + t < (long)H && rowCoverage(rgba, W, y + t, lx0, lx1, ink, tol) >= 0.65) t++;
+    if (t >= 7) return YES;
+    long maxLen = MAX(h, 6) + 1;
+    long left = inkRun(rgba, W, y, lx0 - 1, -1, ink, tol, maxLen);
+    long right = inkRun(rgba, W, y, lx1 + 1, +1, ink, tol, maxLen);
+    if (left >= MAX(h, 6) || right >= MAX(h, 6)) return YES;
+    long third = MAX(h / 3, 3);
+    return left >= third && right >= third;
+}
+
 /// 一块字里每个词的颜色（和下划线）。词的位置用 Vision 自己给的 boundingBoxForRange，
 /// 一行里夹着的蓝色链接就是靠这个认出来的。
 /// Vision 有时给不出词级位置（每个词都回整行的框），这时整块不输出词，只剩整块的字色。
@@ -200,6 +231,9 @@ static NSArray *tokenColors(VNRecognizedText *candidate, CGRect obsBox, CGRect r
     NSMutableArray *tokens = [NSMutableArray array];
     NSMutableArray<NSValue *> *boxes = [NSMutableArray array];
     long lowest = -1;
+    // 找到下划线的词先记下，等整行的词都量完、知道整行笔画的左右边后，再排除按钮、输入框的边（isBoxEdge）
+    NSMutableArray *underCands = [NSMutableArray array];
+    long lineX0 = LONG_MAX, lineX1 = LONG_MIN;
     for (NSValue *v in ranges) {
         NSRange range = v.rangeValue;
         NSError *err = nil;
@@ -229,13 +263,26 @@ static NSArray *tokenColors(VNRecognizedText *candidate, CGRect obsBox, CGRect r
         if (n > 0) {
             long thick = 0;
             long uy = underlineRow(rgba, W, H, x, x + w, y, y + h, h, ink, bg, &thick);
-            if (uy >= 0) { t[@"u"] = @1; if (uy + thick > lowest) lowest = uy + thick; }
+            if (uy >= 0) [underCands addObject:@{ @"t": t, @"uy": @(uy), @"th": @(thick), @"h": @(h),
+                                                  @"c": @[@(ink.r), @(ink.g), @(ink.b)] }];
         }
         [tokens addObject:t];
     }
     // 不同的词拿到一模一样的框，说明这几个位置都是 Vision 瞎给的：这几个词当作量不出来
     for (NSUInteger i = 0; i < boxes.count; i++) for (NSUInteger j = i + 1; j < boxes.count; j++) {
         if (NSEqualRects(boxes[i].rectValue, boxes[j].rectValue)) { tokens[i][@"n"] = @0; tokens[j][@"n"] = @0; }
+    }
+    for (NSDictionary *t in tokens) {
+        long tx = [t[@"x"] longValue], tw = [t[@"w"] longValue];
+        if (tx < lineX0) lineX0 = tx;
+        if (tx + tw > lineX1) lineX1 = tx + tw;
+    }
+    for (NSDictionary *c in underCands) {
+        long uy = [c[@"uy"] longValue], thick = [c[@"th"] longValue];
+        RGB ink = { [c[@"c"][0] intValue], [c[@"c"][1] intValue], [c[@"c"][2] intValue] };
+        if (isBoxEdge(rgba, W, H, uy, lineX0, lineX1, [c[@"h"] longValue], ink, bg)) continue;
+        c[@"t"][@"u"] = @1;
+        if (uy + thick > lowest) lowest = uy + thick;
     }
     *eraseBottom = lowest;
     return tokens;

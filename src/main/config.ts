@@ -20,6 +20,8 @@ export interface Config {
   textKey: string;
   /// 输入翻译：弹出输入框，打字、回车翻译。
   inputKey: string;
+  /// 实时翻译：框选一块区域，之后这块区域里的字一直跟着翻（再按一次关掉）。
+  liveKey: string;
   /// 输入翻译翻成哪种语言：'auto' 是中↔英自动（中文翻英文，外文翻目标语言），
   /// 其它是固定的语言代码。在输入框顶上的下拉里选，选过就记住。
   inputTargetLang?: string;
@@ -60,6 +62,7 @@ const DEFAULT_CONFIG: Config = {
   regionKey: 'alt+cmd+r',
   textKey: 'alt+d',
   inputKey: 'alt+c',
+  liveKey: 'alt+l',
   copyImageKey: 'cmd+c',
   copyTextKey: 'shift+cmd+c',
   peekKey: 'space',

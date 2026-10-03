@@ -6,7 +6,7 @@ import { translateWithOllama } from './providers/ollama';
 import { translateWithGoogle } from './providers/google';
 import { translateWithYoudao } from './providers/youdao';
 import { translateWithApple } from './providers/apple';
-import { InkRun, InkSpan, MarkerStyle, wrapRuns, unwrapRuns } from './ink';
+import { InkRun, InkSpan, MarkerStyle, wrapRuns, unwrapRuns, placeRuns } from './ink';
 import { debugLog } from './native';
 import { uiTerm, BRAND_WORDS } from './glossary';
 
@@ -34,6 +34,12 @@ function keepAsIs(text: string): boolean {
   return KEEP_AS_IS.has(t.toLowerCase()) || KEEP_BRANDS.has(t.toLowerCase());
 }
 
+/// 这一段单独送去时不会交给翻译服务（产品名原样留着、界面词用固定译法）。
+/// 这种段不需要、也不能加上下文：加了反而会被当成一句话交出去翻
+export function fixedAlone(text: string, targetLang: string): boolean {
+  const t = text.replace(/<\/?c\d+>/g, '');
+  return keepAsIs(t) || !!uiTerm(t, targetLang);
+}
 
 /// 句内的产品名换成 XQZ0 这种占位符再发。实测有道会把 ⟦0⟧、{0}、[0]、<0> 这类
 /// 括号占位符删掉或改掉（"Claude" 就此消失、被译成"你"），而字母+数字的生造词
@@ -200,6 +206,21 @@ function maskBrands(text: string, targetLang: string, provider: string, extra: R
   return { text: masked, brands };
 }
 
+/// 译文的连续换行不多于原文：有的服务会把原文的一个换行翻成空一行（两个换行），
+/// 输入翻译、划词翻译里多出来的空行很扎眼。原文没有换行的不管（贴图里的段落本来就不看换行）
+export function capNewlines(target: string, source: string): string {
+  const runs = source.replace(/\r\n?/g, '\n').match(/\n+/g);
+  if (!runs || !target.includes('\n')) return target;
+  const limit = Math.max(...runs.map(r => r.length));
+  return target.replace(/\r\n?/g, '\n').replace(/\n+/g, (m) => '\n'.repeat(Math.min(m.length, limit)));
+}
+
+/// 中文全角标点后面不该有空格。Apple 翻译句与句之间会照英文习惯留一个空格（"现代模块系统。 带有…"），
+/// 画出来像漏了一个字。只删全角标点后面紧跟的空白，换行留着
+function tidyCJKSpaces(text: string): string {
+  return text.replace(/([。！？；：，、）」』】])[ \t\u00a0]+(?=\S)/g, '$1');
+}
+
 function unmaskBrands(text: string, brands: string[]): string {
   if (!brands.length) return text;
   return text.replace(/XQZ(\d+)/gi, (whole, n) => brands[Number(n)] ?? whole);
@@ -279,7 +300,7 @@ export async function translate(
   const resultOf = new Map<string, string>();
   needTranslate.forEach((text, i) => {
     // 没拿到译文（服务少返回了几条、那一批失败）就是空串，调用方会保留原文，不会拿原文冒充译文
-    resultOf.set(text, unmaskBrands(translatedList[i] ?? '', masked[i].brands));
+    resultOf.set(text, tidyCJKSpaces(capNewlines(unmaskBrands(translatedList[i] ?? '', masked[i].brands), text)));
   });
 
   return texts.map(text => glossed.get(text) ?? resultOf.get(text) ?? text);
@@ -290,17 +311,20 @@ export async function translate(
 /// 字母数字标记虽然也回来了，但会把句子翻怪（"单击此处的 QXA1 QXB1"）。
 const MARKER_STYLE: Record<string, MarkerStyle> = {
   openai: 'xml', claude: 'xml', ollama: 'xml', deepl: 'xml',
-  google: 'xml', youdao: 'alnum',
+  google: 'xml',
 };
 
-/// 保持颜色要靠翻译服务把标记原样带回来。实测带不回来的服务在这里关掉，
-/// 那时浮层按以前的办法画黑白字（按底色深浅选黑或白），不会只画一半颜色。
-/// 有道：两种标记都试过，丢标记、挪位置，还会连累译文本身（"Archer-SQ" 被吞掉、
-/// 仓库名被硬翻成"屏幕翻译器"），所以有道不开颜色。
-const INK_UNSUPPORTED = new Set<string>(['youdao']);
+/// 带不回标记的服务：有道两种标记都试过，丢标记、挪位置，还会连累译文本身（"Archer-SQ" 被吞掉、
+/// 仓库名被硬翻成"屏幕翻译器"）。这些服务不用标记，改用"色段单独翻、再到整句译文里找"（placeRuns）。
+/// 找不到的色段不上色，整句译文一个字不受影响
+/// Apple 翻译没有标记可用（系统接口只收纯文本），也走这条路
+const SNIPPET_INK = new Set<string>(['youdao', 'apple']);
+
+/// 实测带不回颜色的服务在这里关掉，那时浮层按以前的办法画黑白字（按底色深浅选黑或白）
+const INK_UNSUPPORTED = new Set<string>([]);
 
 export function inkSupported(provider: string): boolean {
-  return !!MARKER_STYLE[provider] && !INK_UNSUPPORTED.has(provider);
+  return (!!MARKER_STYLE[provider] || SNIPPET_INK.has(provider)) && !INK_UNSUPPORTED.has(provider);
 }
 
 /// 带颜色的翻译：段落里和主色不同的色段先用标记包起来再送去翻译，
@@ -310,8 +334,9 @@ export async function translateWithInk(
   targetLang: string,
   config: Config,
   inkOn: boolean
-): Promise<{ text: string; spans: InkSpan[] }[]> {
+): Promise<{ text: string; spans: InkSpan[]; ink?: [number, number, number] }[]> {
   const style = MARKER_STYLE[config.provider];
+  if (inkOn && SNIPPET_INK.has(config.provider)) return translateWithSnippets(items, targetLang, config);
   if (!inkOn || !style) {
     const out = await translate(items.map(i => i.text), targetLang, config);
     return out.map(text => ({ text, spans: [] }));
@@ -323,6 +348,37 @@ export async function translateWithInk(
     const { text, spans, kept } = unwrapRuns(translated, wrapped[i].marks, style);
     if (kept < wrapped[i].marks.length) {
       debugLog(`  颜色标记 ${wrapped[i].marks.length} 个只回来 ${kept} 个：${translated}`);
+    }
+    return { text, spans };
+  });
+}
+
+/// 整句和色段分两次送：整句照常翻（和不上色时完全一样），色段原文去重后一次批量翻，
+/// 再按 placeRuns 到整句译文里找位置
+async function translateWithSnippets(
+  items: { text: string; runs?: InkRun[] }[],
+  targetLang: string,
+  config: Config,
+): Promise<{ text: string; spans: InkSpan[]; ink?: [number, number, number] }[]> {
+  const runTexts = [...new Set(items.flatMap(i => (i.runs || []).map(r => r.text.trim())).filter(Boolean))];
+  const [whole, parts] = await Promise.all([
+    translate(items.map(i => i.text), targetLang, config),
+    runTexts.length ? translate(runTexts, targetLang, config).catch(() => [] as string[]) : Promise.resolve([] as string[]),
+  ]);
+  const snippetOf = new Map(runTexts.map((t, i) => [t, parts[i] || ''] as [string, string]));
+  return whole.map((text, i) => {
+    const runs = items[i].runs;
+    if (!text || !runs?.length) return { text, spans: [] };
+    const spans = placeRuns(items[i].text, text, runs, r => snippetOf.get(r.text.trim()));
+    if (spans.length < runs.length) {
+      debugLog(`  色段 ${runs.length} 个找到 ${spans.length} 个：${runs.map(r => `「${r.text}」→「${snippetOf.get(r.text.trim()) || ''}」`).join(' ')} 在「${text}」`);
+      // 没找到的色段只能画成主色。没找到的那一段比主色的字还长时（"Sonnet 5.5 (anthropic.com)"：
+      // 标题黑字短、网址灰字长，主色量成了灰色），整句画成灰色反而更扎眼，改用它的颜色当主色
+      const runLen = runs.reduce((n, r) => n + r.text.trim().length, 0);
+      const mainLen = items[i].text.length - runLen;
+      const placedInk = new Set(spans.map(s => s.ink));
+      const missed = runs.filter(r => !placedInk.has(r.ink)).sort((a, b) => b.text.length - a.text.length)[0];
+      if (missed && missed.text.trim().length > mainLen) return { text, spans, ink: missed.ink };
     }
     return { text, spans };
   });

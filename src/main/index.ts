@@ -8,17 +8,19 @@ app.setPath('userData', nodePath.join(app.getPath('appData'), 'TTY'));
 import { takeScreenshot } from './screenshot';
 import { listWindows } from './ocr';
 import { recognizeImage, translateRecognized } from './pipeline';
+import { warmApple } from './providers/apple';
 import { windowsOnDisplay } from './layout';
 import { getConfig, saveConfig, migrateConfig, applyLoginItem } from './config';
 import { debugLog, debugLogVerbose } from './native';
 import { t, readableError } from './i18n';
 import { ensureOverlayWindow, showOverlay, hideOverlay, isOverlayVisible, showLoading, hideLoading, showCancelled, setDismissCallback, discardCurrentScreenshot } from './overlay';
-import { createTray, openSettings, setTranslateCallback, setHideCallback, setClearCacheCallback, setSelectionTranslateCallback, setInputTranslateCallback, setOverlayVisibleFn, updateTrayMenu } from './tray';
-import { startHotkeyMonitor, stopHotkeyMonitor, restartWithHotkeys, sendHotkeyState, setHotkeyPermissionDeniedHandler, setHotkeyRegisterFailedHandler, setTextCallback, setInputCallback, getHotkeyBackend } from './hotkey';
+import { createTray, openSettings, setTranslateCallback, setHideCallback, setClearCacheCallback, setSelectionTranslateCallback, setInputTranslateCallback, setOverlayVisibleFn, updateTrayMenu, setLiveCallbacks } from './tray';
+import { startHotkeyMonitor, stopHotkeyMonitor, restartWithHotkeys, sendHotkeyState, setHotkeyPermissionDeniedHandler, setHotkeyRegisterFailedHandler, setTextCallback, setInputCallback, setLiveCallback, setLiveDismiss, getHotkeyBackend } from './hotkey';
 import { showSelectionTranslate, hideQuick } from './quick';
 import { showInputTranslate, hideInput } from './input';
 import { showSelection, cancelSelection, isSelectionActive } from './selection';
 import { showRegionOverlay, closeAllRegionOverlays } from './region-overlay';
+import { toggleLive, isLiveActive, isLiveRunning, stopLive, setLiveChangeCallback, setLiveHidden } from './live';
 import * as fs from 'fs';
 
 let isProcessing = false;
@@ -152,6 +154,15 @@ app.whenReady().then(() => {
   setInputCallback(() => { showInputTranslate(); });
   setSelectionTranslateCallback(() => { showSelectionTranslate(); });
   setInputTranslateCallback(() => { showInputTranslate(); });
+  // 实时翻译：框选窗口和区域翻译共用，正在截屏翻译、正在框选时不开
+  const liveToggle = () => {
+    if (!isLiveActive() && (isProcessing || isRegionProcessing || isSelectionActive())) return;
+    toggleLive().catch(e => console.error('[live]', e));
+  };
+  setLiveCallback(liveToggle);
+  setLiveCallbacks(liveToggle, isLiveActive);
+  // 实时翻译开着时，设置里的关闭键也能关它
+  setLiveChangeCallback(() => { updateTrayMenu(); setLiveDismiss(isLiveRunning() ? stopLive : null); });
   setClearCacheCallback(() => {
     translationCache.clear();
     console.log('[cache] Cleared by user');
@@ -248,6 +259,7 @@ app.whenReady().then(() => {
       region: getConfig().regionKey,
       text: getConfig().textKey,
       input: getConfig().inputKey,
+      live: getConfig().liveKey,
     }
   );
 
@@ -271,6 +283,7 @@ async function handleTranslate() {
   isCancelled = false;
   sendHotkeyState('TRANSLATING');
   const config = getConfig();
+  if (config.provider === 'apple') warmApple(config.targetLanguage || 'zh-CN');
 
   try {
     // Detect which display the cursor is on — translate that screen, not always primary
@@ -282,9 +295,11 @@ async function handleTranslate() {
     hideQuick();
     hideInput();
     hideLoading();
+    setLiveHidden(true);
     // 等浮层真正从屏幕上消失再截屏。100ms 够一帧合成，再长就是白等。
     await new Promise(r => setTimeout(r, 100));
-    const [screenshotPath, windows] = await Promise.all([takeScreenshot(display.bounds), listWindows()]);
+    const [screenshotPath, windows] = await Promise.all([takeScreenshot(display.bounds), listWindows()])
+      .finally(() => setLiveHidden(false));
     debugLogVerbose(`窗口 ${windows.length} 个: ${windows.map(w => `${Math.round(w.x)},${Math.round(w.y)} ${Math.round(w.width)}x${Math.round(w.height)}`).join(' | ')}`);
     try {
       debugLog(`截图 ${screenshotPath} ${fs.statSync(screenshotPath).size} 字节, 显示器 ${display.bounds.width}x${display.bounds.height} @${scaleFactor}x`);
@@ -378,9 +393,12 @@ function usingPermissionFreeHotkeys(): boolean {
 
 async function handleRegionTranslate() {
   const config = getConfig();
+  if (config.provider === 'apple') warmApple(config.targetLanguage || 'zh-CN');
   isRegionProcessing = true;
   try {
-    const selection = await showSelection();
+    // 实时翻译开着时先把它藏起来、等一帧合成，框选用的那张截图里才不会带着它的译文
+    if (isLiveActive()) { setLiveHidden(true); await new Promise(r => setTimeout(r, 80)); }
+    const selection = await showSelection().finally(() => setLiveHidden(false));
     if (!selection) { isRegionProcessing = false; return; } // user cancelled
 
     isCancelled = false;

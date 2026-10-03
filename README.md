@@ -7,7 +7,7 @@
 <p align="center"><strong>贴图翻译 · macOS 屏幕翻译工具 · 全屏翻译 · 选区翻译 · 像素级原位覆盖</strong></p>
 
 <p align="center">
-  <a href="https://github.com/kistCc/TTY/releases/latest"><img src="https://img.shields.io/badge/Release-v1.5.0-blue?style=flat" alt="Release"></a>
+  <a href="https://github.com/kistCc/TTY/releases/latest"><img src="https://img.shields.io/badge/Release-v1.5.5-blue?style=flat" alt="Release"></a>
   <a href="https://github.com/kistCc/TTY/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey?style=flat" alt="macOS">
   <img src="https://img.shields.io/badge/Electron-33-47848f?style=flat" alt="Electron">
@@ -26,15 +26,15 @@
 上游作者 **[@Archer-SQ](https://github.com/Archer-SQ)**，原项目以 MIT 许可证发布。
 截图、OCR、翻译、像素级原位覆盖这套核心设计全部来自上游，在此致谢。
 
-本仓库基于上游 v1.2.3，当前版本 v1.5.0。主要改动：
+本仓库基于上游 v1.2.3，当前版本 v1.5.5。主要改动：
 
 - **快捷键与稳定性** — 普通组合键不再需要「输入监控」权限；修好快捷键没反应、翻译失败后卡死；只认设置里的关闭键
 - **界面中文化** — 提示条、托盘菜单、对话框全部中文，快捷键按 macOS 符号显示
-- **新功能** — 划词翻译（`⌥D`）、输入翻译（`⌥C`）、贴图复制（`⌘C` / `⇧⌘C`）、按住看原文
+- **新功能** — 实时翻译（`⌥L`，框一块区域，字变了译文跟着变）、划词翻译（`⌥D`）、输入翻译（`⌥C`）、贴图复制（`⌘C` / `⇧⌘C`）、按住看原文
 - **识别更准** — 整屏分块找字、按区域放大重认；深色页面不漏字；日文、韩文按对应语言重认
 - **翻译更准** — 整段翻译整段覆盖；代码、网址、产品名不翻；常见界面词固定译法；保持原文颜色
 - **贴图更干净** — 只擦字形，图标、徽章、标签横线保留；字号跟着原文走
-- **翻译引擎** — 新增有道（免费）、Apple 翻译（免费，离线）；各家服务统一分批、失败保留原文
+- **翻译引擎** — 新增有道（免费）、Apple 翻译（免费，离线）；各家服务统一分批、卡住自动重发、失败保留原文；有道和 Apple 翻译也能保持链接等色段的颜色
 - **隐私与打扰** — 关闭浮层即删截图；只驻留菜单栏；应用更名 TTY、自制图标
 
 每一项的细节见 [docs/改动详情.md](docs/改动详情.md)。
@@ -45,9 +45,10 @@
 
 一键翻译 macOS 屏幕上的任何文字 — 网页、应用、游戏、设置、错误提示，都能直接在原位置覆盖译文，像原生汉化一样。
 
-两种模式：
+三种模式：
 - **全屏翻译**（`⌥⌘T`）— 按一下翻译整个屏幕
 - **选区翻译**（`⌥⌘R`）— 拖拽框选，只翻译你关心的部分
+- **实时翻译**（`⌥L`）— 框选一块区域，之后这块区域里的字一变，译文跟着变；滚动时译文先藏起来，停下后马上重新翻；再按一次、按设置里的关闭键或点 ✕ 关掉（关闭键要带修饰键，比如 `⌥⎋`；光一个 `Esc` 不行，不然它开着的时候整个系统的 Esc 都会被占住）
 
 > 快捷键可在设置里改。用普通组合键（修饰键 + 一个键）**不需要任何系统权限**；
 > 若改成 `Shift+Z+X` 这类和弦，则需要授予「输入监控」。
@@ -178,8 +179,8 @@ npm run dist
 | 服务 | API Key | 说明 |
 |------|:---:|------|
 | **Google 翻译** | 否 | 免费内置，自动代理；支持保持原文颜色；英文句子里夹着中文（文件路径、中文名词）也能翻，夹着的中文原样保留 |
-| **有道翻译** | 否 | 免费内置，走网页版接口，国内直连；不支持保持原文颜色 |
-| **Apple 翻译** | 否 | 免费、离线，macOS 自带翻译（需 macOS 26.4 起，先在系统设置下载语言）；长句通顺，界面短词不如有道 |
+| **有道翻译** | 否 | 免费内置，走网页版接口，国内直连；支持保持原文颜色（个别色段找不准时不上色） |
+| **Apple 翻译** | 否 | 免费、离线，macOS 自带翻译（需 macOS 26.4 起，先在系统设置下载语言）；长句通顺，界面短词不如有道；支持保持原文颜色（同有道） |
 | **OpenAI 兼容** | 是 | GPT-4o-mini，支持自定义端点 |
 | **Anthropic 兼容** | 是 | Claude、MiniMax 等 |
 | **DeepL** | 是 | 欧洲语言高质量 |
@@ -254,4 +255,4 @@ MIT
 |---|---|
 | [@kistCc](https://github.com/kistCc) | 本分支维护 |
 | [@Archer-SQ](https://github.com/Archer-SQ) | 上游 [screen-translator](https://github.com/Archer-SQ/screen-translator) 作者 |
-| [Claude](https://claude.com/claude-code)（Anthropic） | v1.3.x 的有道翻译接入、全屏整段翻译重构、图标与文档，v1.4.0 的保持原文颜色，v1.5.0 的识别与绘制改造，由 Claude 结对完成 |
+| [Claude](https://claude.com/claude-code)（Anthropic） | v1.3.x 的有道翻译接入、全屏整段翻译重构、图标与文档，v1.4.0 的保持原文颜色，v1.5.0 的识别与绘制改造，v1.5.5 的实时翻译，由 Claude 结对完成 |

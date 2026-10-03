@@ -1,5 +1,10 @@
 const canvas = document.getElementById('result');
 const ctx = canvas.getContext('2d');
+/// 实时翻译窗口（live.ts 加载时带 ?live=1）：透明、鼠标穿透，只在原文所在的地方盖上译文
+const LIVE = new URLSearchParams(location.search).get('live') === '1';
+/// 实时翻译窗口比框选区域多一条放把手、关闭按钮的窄条（见 live.ts 的 BAR），默认在上方
+const LIVE_BAR = LIVE ? 22 : 0;
+const LIVE_BAR_TOP = new URLSearchParams(location.search).get('bar') !== 'bottom';
 
 const MIN_FONT_RATIO = 0.6;
 const FONT_HEIGHT_RATIO = 0.75;
@@ -59,7 +64,7 @@ window.api.onShowTranslation((data) => {
     clean.getContext('2d').drawImage(img, 0, 0);
 
     const scaleX = img.width / window.innerWidth;
-    const scaleY = img.height / window.innerHeight;
+    const scaleY = img.height / (window.innerHeight - LIVE_BAR);
 
     // Pre-compute pixel-space coords + cluster blocks into rows for font normalization
     const px = blocks.map(b => ({
@@ -222,6 +227,23 @@ window.api.onShowTranslation((data) => {
       }
     });
 
+    // 实时翻译：只留原文所在的那几块（擦掉的原文、画上的译文），其余地方挖成透明，
+    // 下面的画面（视频、动画、别的没变的东西）照常露出来，不是一张会过时的截图
+    if (LIVE) {
+      const pad = Math.round(4 * scaleX);
+      const mask = document.createElement('canvas');
+      mask.width = canvas.width;
+      mask.height = canvas.height;
+      const m = mask.getContext('2d');
+      m.fillStyle = '#000';
+      for (const r of data.eraseRects || []) m.fillRect(r.x * scaleX - pad, r.y * scaleY - pad, r.width * scaleX + pad * 2, r.height * scaleY + pad * 2);
+      for (const p of px) m.fillRect(p.x - pad, p.y - pad, p.w + pad * 2, p.h + pad * 2);
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-in';
+      ctx.drawImage(mask, 0, 0);
+      ctx.restore();
+    }
+
     originalCanvas = clean;
     translatedCanvas = document.createElement('canvas');
     translatedCanvas.width = canvas.width;
@@ -251,11 +273,52 @@ function modeToCursor(m) {
 }
 
 let drag = null;
+
+// 实时翻译窗口的控件：左上角拖动把手、右上角关闭按钮。鼠标移进窗口才显示。
+// 窗口平时鼠标穿透（点、滚都落到下面的软件上），鼠标在边缘（改大小）、把手、按钮上时才自己接鼠标
+let liveGrip = null, liveClose = null;
+if (LIVE) {
+  document.body.style.cursor = 'default';
+  const css = document.createElement('style');
+  css.textContent = `
+    #result { top: ${LIVE_BAR_TOP ? LIVE_BAR : 0}px; height: calc(100% - ${LIVE_BAR}px); }
+    #focusRing { ${LIVE_BAR_TOP ? 'top' : 'bottom'}: ${LIVE_BAR}px; }
+    .liveCtl { position: fixed; ${LIVE_BAR_TOP ? 'top' : 'bottom'}: 1px; z-index: 20; height: 20px; min-width: 20px; padding: 0 6px;
+      border-radius: 6px; background: rgba(30, 30, 46, 0.82); color: #cdd6f4;
+      font: 600 11px/20px -apple-system, "PingFang SC", sans-serif; text-align: center;
+      opacity: 0; transition: opacity 0.12s ease; user-select: none; }
+    body.hover .liveCtl { opacity: 1; }
+    #liveGrip { left: 4px; cursor: move; }
+    #liveClose { right: 4px; cursor: pointer; }
+    #liveClose:hover { background: rgba(243, 139, 168, 0.9); color: #1e1e2e; }
+    #focusRing { box-shadow: inset 0 0 0 1px rgba(203, 166, 247, 0.55) !important; }`;
+  document.head.appendChild(css);
+  liveGrip = document.createElement('div');
+  liveGrip.id = 'liveGrip'; liveGrip.className = 'liveCtl'; liveGrip.textContent = '⠿ 实时';
+  liveClose = document.createElement('div');
+  liveClose.id = 'liveClose'; liveClose.className = 'liveCtl'; liveClose.textContent = '✕';
+  document.body.appendChild(liveGrip);
+  document.body.appendChild(liveClose);
+  liveClose.addEventListener('click', () => window.api.dismiss());
+  let through = true;
+  const setThrough = (on) => { if (on !== through) { through = on; window.api.passThrough(on); } };
+  document.addEventListener('mousemove', (e) => {
+    document.body.classList.add('hover');
+    if (drag) return;
+    const onCtl = e.target === liveGrip || e.target === liveClose;
+    setThrough(!(onCtl || getEdgeMode(e) !== ''));
+  });
+  document.addEventListener('mouseleave', () => { document.body.classList.remove('hover'); if (!drag) setThrough(true); });
+}
+
 document.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
+  if (LIVE && e.target === liveClose) return;
+  // 实时翻译：只有把手能拖动窗口，边缘改大小；别的地方本来就穿透，到不了这里
+  if (LIVE && e.target !== liveGrip && getEdgeMode(e) === '') return;
   // 点一下就拿焦点，否则 ⌘C 收不到（浮层是 showInactive 弹出来的）
   if (window.api.focusWindow) window.api.focusWindow();
-  drag = { x: e.screenX, y: e.screenY, mode: getEdgeMode(e) };
+  drag = { x: e.screenX, y: e.screenY, mode: LIVE && e.target === liveGrip ? '' : getEdgeMode(e) };
 });
 document.addEventListener('mousemove', (e) => {
   if (drag) {
@@ -269,8 +332,11 @@ document.addEventListener('mousemove', (e) => {
     }
     drag.x = e.screenX;
     drag.y = e.screenY;
-  } else {
+  } else if (!LIVE) {
     document.body.style.cursor = modeToCursor(getEdgeMode(e));
+  } else {
+    const m = getEdgeMode(e);
+    document.body.style.cursor = m ? modeToCursor(m) : '';
   }
 });
 document.addEventListener('mouseup', () => { drag = null; });

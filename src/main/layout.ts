@@ -93,6 +93,8 @@ export function eraseRectOf(b: TextBlock) {
 /// 段落配上译文。颜色关掉时把颜色信息整个拿掉，浮层就按以前的黑白字画。
 export function withTranslation(block: ParagraphBlock, result: { text: string; spans: any[] } | undefined, inkOn: boolean) {
   const out: any = { ...block, translated: result?.text || '', spans: inkOn ? result?.spans || [] : [] };
+  // 色段没找到、又比主色的字还长时，翻译那边改了主色（见 translateWithSnippets）
+  if (inkOn && (result as any)?.ink) out.ink = (result as any).ink;
   if (!inkOn) { delete out.ink; delete out.runs; delete out.underline; }
   delete out.eraseBottom;
   delete out.segs;

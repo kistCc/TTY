@@ -85,8 +85,20 @@ export function summarizeTokens(text: string, tokens: InkToken[] | undefined, bg
     g.chars += t.e - t.s;
     g.pixels += t.n;
   }
-  // 组的颜色取离底色最远的那个词：细笔画被抗锯齿冲淡，最"浓"的那个最接近真正的字色
-  if (bg) for (const g of groups) g.ink = g.members.reduce((a, b) => (colorDistance(b.c, bg) > colorDistance(a.c, bg) ? b : a)).c;
+  // 组的颜色要取偏"浓"的词：细笔画被抗锯齿冲淡，浓的更接近真正的字色。但不取最浓的那一个——
+  // 灰字里夹着几个加粗的白字时（明暗差得不多，归在同一组），最浓的是白字，整行会被画成白色。
+  // 按离底色由远到近排好，取字数累计到四分之一的那个词
+  if (bg) for (const g of groups) {
+    const sorted = [...g.members].sort((a, b) => colorDistance(b.c, bg) - colorDistance(a.c, bg));
+    let acc = 0;
+    let pick = sorted[0];
+    for (const t of sorted) {
+      pick = t;
+      acc += t.e - t.s;
+      if (acc * 4 >= g.chars) break;
+    }
+    g.ink = pick.c;
+  }
   const main = groups.reduce((a, b) => (b.chars > a.chars || (b.chars === a.chars && b.pixels > a.pixels) ? b : a));
 
   const mainChars = main.members.reduce((s, t) => s + (t.e - t.s), 0);
@@ -307,4 +319,73 @@ function collapseMarkerSpaces(text: string, positions: number[], spans: InkSpan[
   const lead = out.length - out.trimStart().length;
   if (lead) for (const s of spans) { s.start = Math.max(0, s.start - lead); s.end = Math.max(0, s.end - lead); }
   return out.trim();
+}
+
+/// 不靠标记找色段（有道这种带不回标记的服务用）：整句先照常翻；每个色段的原文再单独翻一次，
+/// 拿这个短译文到整句译文里找位置。原文原样出现在译文里的（产品名、网址、代码）直接按原样找。
+/// 找不到、或者整句里出现了好几处又分不清是哪一处的，那个色段就不上色——宁可少上色，不能上错。
+/// （思路来自 SwiftyCrow 的 TranslationStyleMapper：先找原样出现的，找不到再用单独翻的短译文去对）
+export function placeRuns(
+  source: string, translated: string, runs: InkRun[] | undefined, snippet: (run: InkRun) => string | undefined,
+): InkSpan[] {
+  if (!runs?.length || !translated) return [];
+  const spans: InkSpan[] = [];
+  const free = (a: number, b: number) => !spans.some(s => a < s.end && b > s.start);
+  let srcCursor = 0;
+  for (const run of runs) {
+    const raw = run.text.trim();
+    if (!raw) continue;
+    let srcAt = source.indexOf(raw, srcCursor);
+    if (srcAt < 0) srcAt = source.indexOf(raw);
+    if (srcAt < 0) continue;
+    srcCursor = srcAt + raw.length;
+    // 色段在原文里的相对位置（0~1），译文里有几处候选时挑相对位置最近的
+    const rel = (srcAt + raw.length / 2) / Math.max(1, source.length);
+    const cands = [raw, ...variants(snippet(run) || '')].filter((c, i, a) => c && a.indexOf(c) === i);
+    let placed = false;
+    // 空格不算：有道整句里写 "Tauri 1.0博客文章"，单独翻出来是 "Tauri 1.0 博客文章"
+    const { flat, at: flatAt } = squeeze(translated);
+    for (const cand of cands) {
+      const c = cand.replace(/\s+/g, '');
+      // 太短的（一个汉字、一两个字母）到处都能撞上，不拿来找
+      if ([...c].length < (/[\u3400-\u9fff]/.test(c) ? 2 : 3)) continue;
+      const hits: { start: number; end: number }[] = [];
+      for (let k = flat.indexOf(c); k >= 0; k = flat.indexOf(c, k + 1)) {
+        const start = flatAt[k], end = flatAt[k + c.length - 1] + 1;
+        if (free(start, end)) hits.push({ start, end });
+      }
+      if (!hits.length) continue;
+      const dist = (h: { start: number; end: number }) => Math.abs((h.start + h.end) / 2 / translated.length - rel);
+      hits.sort((a, b) => dist(a) - dist(b));
+      // 好几处：相对位置最近的那处要比第二近的明显更近，否则分不清，不上色
+      if (hits.length > 1 && dist(hits[1]) - dist(hits[0]) < 0.25) break;
+      spans.push({ start: hits[0].start, end: hits[0].end, ink: run.ink, underline: run.underline });
+      placed = true;
+      break;
+    }
+    if (!placed) continue;
+  }
+  return spans.sort((a, b) => a.start - b.start);
+}
+
+/// 去掉空白后的文字，和每个字在原串里的下标
+function squeeze(s: string): { flat: string; at: number[] } {
+  let flat = '';
+  const at: number[] = [];
+  for (let i = 0; i < s.length; i++) if (!/\s/.test(s[i])) { flat += s[i]; at.push(i); }
+  return { flat, at };
+}
+
+/// 单独翻出来的短译文常比句子里的多出虚字（"在这里"↔"这里"、"的文档"↔"文档"），
+/// 依次去掉两头的标点和虚字再试
+function variants(s: string): string[] {
+  const out: string[] = [];
+  let t = s.trim();
+  if (!t) return out;
+  out.push(t);
+  t = t.replace(/^[\s"'“‘「『（(【\[]+|[\s"'”’」』）)】\]。.,，、；;：:！!？?]+$/g, '');
+  out.push(t);
+  const t2 = t.replace(/^(?:在|的|了|是|把|被|对|于|和|与|将)/, '').replace(/(?:的|了|吗|呢)$/, '');
+  if (t2 !== t) out.push(t2);
+  return out;
 }

@@ -23,6 +23,9 @@ const BATCH_MAX_CHARS = 1200;
 const MAX_CONCURRENCY = 4;
 /// 密钥有时效，缓存一段时间就重取；请求失败时也会立刻作废重来。
 const KEY_TTL_MS = 10 * 60 * 1000;
+/// 一次请求多久没回就算卡住。有道正常一两秒就回；卡住的请求等再久也不会回来，
+/// 不如早点放弃、换一把密钥重发一次（translateOneRetry）
+const REQUEST_TIMEOUT_MS = 10_000;
 
 // 有道网页翻译接受的语言代码
 const YOUDAO_LANG_MAP: Record<string, string> = {
@@ -99,6 +102,7 @@ async function fetchKey(): Promise<YoudaoKey> {
   const raw = await requestText(`${DICT_URL}/webtranslate/key?${params}`, {
     method: 'GET',
     headers,
+    timeoutMs: REQUEST_TIMEOUT_MS,
   });
 
   let parsed: { code: number; msg?: string; data?: YoudaoKey };
@@ -161,6 +165,7 @@ async function translateOne(text: string, targetLang: string): Promise<Translate
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
+    timeoutMs: REQUEST_TIMEOUT_MS,
   });
 
   // 出错时有道回的是明文 JSON（{"code":50,...}）或网页，不是密文。拿去解密只会得到一串乱码，

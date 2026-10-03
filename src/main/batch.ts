@@ -2,13 +2,38 @@
 ///
 /// 之前每个 provider 都是 `for (...) await` 串行发批次：一屏几十上百个文本块
 /// 要排成四五轮往返，代理链路上每轮都是一两秒。批次之间没有任何依赖，排队纯属浪费。
+/// 给一次调用设上限：到点还没结果就当它卡住了，报超时。卡住的那次调用不等它（也停不下来），
+/// 它以后再回来的结果直接丢掉。
+export function withDeadline<T>(run: () => Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`翻译服务超时（${Math.round(ms / 1000)} 秒没有回应）`)), ms);
+    run().then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
+/// 卡住（超时）的那一批自动重发一次；别的错误照常往外抛。
+export async function withDeadlineRetry<T>(run: () => Promise<T>, ms: number): Promise<T> {
+  try {
+    return await withDeadline(run, ms);
+  } catch (e: any) {
+    if (!/超时/.test(String(e?.message || e))) throw e;
+    console.warn(`[batch] ${Math.round(ms / 1000)} 秒没有回应，重发一次`);
+    return withDeadline(run, ms);
+  }
+}
+
 export async function mapBatchesConcurrent<T>(
   texts: string[],
   batchSize: number,
   concurrency: number,
   handler: (batch: string[]) => Promise<T[]>,
   onBatchError?: (err: any, batch: string[]) => void,
-  maxChars?: number
+  maxChars?: number,
+  /// 每一批的时间上限（毫秒）。不给就不限（请求自己带超时的服务，比如有道、大模型，走 http.ts 的超时）
+  deadlineMs?: number
 ): Promise<T[][]> {
   // 批次不能只按"条数"切。改成整段翻译之后，一条就是一整段（三四百字），
   // 20 条拼起来能有七八千字，接口直接不返回，整批退回原文——屏幕上就留下一片
@@ -37,7 +62,7 @@ export async function mapBatchesConcurrent<T>(
       const i = cursor++;
       if (i >= batches.length) return;
       try {
-        out[i] = await handler(batches[i]);
+        out[i] = deadlineMs ? await withDeadlineRetry(() => handler(batches[i]), deadlineMs) : await handler(batches[i]);
       } catch (err) {
         failures++;
         lastErr = err;

@@ -8,6 +8,8 @@ const MAX_CONCURRENCY = 4;
 /// 整段翻译之后一条就是一整段，20 段能有七八千字；Google 网页接口一次最多约 5000 字，
 /// 超了整批失败。按字数再切一刀。
 const BATCH_MAX_CHARS = 4500;
+/// 一批多久没回就算卡住、重发一次（网页接口正常一两秒就回）
+const BATCH_DEADLINE_MS = 15_000;
 let proxyInitialized = false;
 
 function getSystemProxy(): string | null {
@@ -79,7 +81,8 @@ export async function translateWithGoogle(
     (err, batch) => {
       console.error(`[Google] Batch failed (${batch.length} texts):`, err?.message || err);
     },
-    BATCH_MAX_CHARS
+    BATCH_MAX_CHARS,
+    BATCH_DEADLINE_MS
   );
   return batched.flat();
 }

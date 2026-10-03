@@ -1,6 +1,6 @@
 // 用 macOS 自带的翻译（Translation 框架）翻一批文本。离线、免费、不限量。
 //
-// 输入（stdin，JSON）：{"target": "zh-Hans", "texts": ["...", ...], "strategy": "fast" | "best"}
+// 输入（stdin，JSON）：{"target": "zh-Hans", "texts": ["...", ...], "strategy": "fast" | "best", "warm": true（可选，只叫醒服务）}
 // 输出（stdout，JSON）：{"translations": ["...", ...], "missing": ["en", ...], "errors": ["..."]}
 //   - translations 和 texts 一一对应；没翻（语言包没装、本来就是目标语言、出错）的是空串，调用方保留原文
 //   - missing：需要先在「系统设置 → 通用 → 语言与地区 → 翻译语言」下载的源语言
@@ -17,6 +17,9 @@ struct Input: Decodable {
     let target: String
     let texts: [String]
     let strategy: String?
+    /// true：只把系统翻译服务叫醒（查到语言包状态就退出），不翻译。按下截屏键时先跑一次，
+    /// 服务在识字的那几秒里醒过来，轮到翻译时就不用再等它启动
+    let warm: Bool?
 }
 
 struct Output: Encodable {
@@ -81,9 +84,42 @@ if #available(macOS 26.4, *) {
     }
     let target = Locale.Language(identifier: input.target)
     let availability = LanguageAvailability()
+    // 系统翻译服务（translationd）闲置会自己退出。刚被叫起来时，第一次查询会把已装好的语言包
+    // 报成「支持但没装」（.supported），约 0.1 秒后再查才是 .installed。
+    // 所以服务还没「醒」时查到 .supported，每 0.1 秒重查，最多 1.5 秒；真没装的会一直是 .supported，等满就算缺。
+    // 只要有一次查到 .installed，就说明服务已经醒了，之后的 .supported 都是真没装，不再等。
+    // （.supported 时直接建会话去翻没用：一样报 notInstalled。）
+    var statusCache: [String: LanguageAvailability.Status] = [:]
+    var awake = false
+    func status(_ source: Locale.Language) async -> LanguageAvailability.Status {
+        let key = source.maximalIdentifier
+        if let s = statusCache[key] { return s }
+        var s = await availability.status(from: source, to: target)
+        var waited = 0
+        while s == .supported && !awake && waited < 1500 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            waited += 100
+            s = await availability.status(from: source, to: target)
+        }
+        if s == .installed { awake = true }
+        statusCache[key] = s
+        return s
+    }
+    if input.warm == true {
+        // 随便查一对常用语言就能把服务叫醒；要一直查到 .installed 才算醒（只问一次，退出后服务还是没醒）
+        let probe = Locale.Language(identifier: target.minimalIdentifier.hasPrefix("en") ? "zh-Hans" : "en")
+        _ = await status(probe)
+        emit(out)
+        exit(0)
+    }
+    // 先查段数最多的那种语言，顺便把服务叫醒，后面按单句猜出的小语种不用每个都等
+    if let main = groups.filter({ Locale.Language(identifier: $0.key).minimalIdentifier != target.minimalIdentifier })
+        .max(by: { $0.value.count < $1.value.count })?.key {
+        _ = await status(Locale.Language(identifier: main))
+    }
     // 按单句猜出来的拉丁语种，没装语言包就并回整页的语种（单句也有猜错的时候，宁可按整页翻）
     for lang in Array(groups.keys) where lang != latin && scriptLanguage(input.texts[groups[lang]![0]]) == nil {
-        let st = await availability.status(from: Locale.Language(identifier: lang), to: target)
+        let st = await status(Locale.Language(identifier: lang))
         if st != .installed { groups[latin, default: []] += groups.removeValue(forKey: lang)! }
     }
     out.groups = groups.mapValues { $0.count }
@@ -91,8 +127,7 @@ if #available(macOS 26.4, *) {
     for (lang, idxs) in groups.sorted(by: { $0.key < $1.key }) {
         let source = Locale.Language(identifier: lang)
         if source.minimalIdentifier == target.minimalIdentifier { continue }
-        let status = await availability.status(from: source, to: target)
-        if status != .installed {
+        if await status(source) != .installed {
             out.missing.append(lang)
             continue
         }

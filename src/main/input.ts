@@ -1,6 +1,7 @@
 import { BrowserWindow, screen, clipboard, ipcMain, app } from 'electron';
 import * as path from 'path';
 import { getConfig, saveConfig } from './config';
+import { warmApple } from './providers/apple';
 import { translate } from './translator';
 import { pickTargetLang } from './quick';
 import { isChineseUI, readableError } from './i18n';
@@ -144,7 +145,9 @@ export function showInputTranslate() {
   rememberFrontApp();
   const win = ensureInputWindow();
   requestSeq++;
-  const saved = getConfig().inputTargetLang;
+  const cfg = getConfig();
+  if (cfg.provider === 'apple') warmApple(cfg.targetLanguage || 'zh-CN'); // 趁打字时叫醒系统翻译服务
+  const saved = cfg.inputTargetLang;
   send(win, 'input-show', { lang: isChineseUI() ? 'zh' : 'en', chosen: saved && TARGETS.includes(saved) ? saved : 'auto' });
   positionNearCursor(win, MIN_HEIGHT);
   setInputLevel(win, false); // 上次拼到一半就关掉的话，层级可能还停在 floating

@@ -1,5 +1,5 @@
 import { execFile, ChildProcess } from 'child_process';
-import { globalShortcut } from 'electron';
+import { BrowserWindow, globalShortcut } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as readline from 'readline';
@@ -30,6 +30,7 @@ let cancelFn: (() => void) | null = null;
 let regionFn: (() => void) | null = null;
 let textFn: (() => void) | null = null;
 let inputFn: (() => void) | null = null;
+let liveFn: (() => void) | null = null;
 let permissionDeniedFn: (() => void) | null = null;
 let registerFailedFn: ((accelerators: string[]) => void) | null = null;
 let currentArgs: string[] = [];
@@ -42,6 +43,11 @@ let currentState: HotkeyState = 'HIDDEN';
 let currentHotkeys: Hotkeys = {};
 /// Accelerators registered only while the overlay is up / a translation is running.
 let transientAccelerators: string[] = [];
+/// 常驻注册的键（全屏、区域、划词、输入、实时），关闭键不能把它们顶掉
+let permanentAccelerators: string[] = [];
+/// 实时翻译开着时，关闭键用来关它（见 syncLiveDismiss）
+let liveDismissFn: (() => void) | null = null;
+let liveDismissAccel: string | null = null;
 
 export interface Hotkeys {
   trigger?: string;
@@ -50,6 +56,7 @@ export interface Hotkeys {
   region?: string;
   text?: string;
   input?: string;
+  live?: string;
 }
 
 export interface HotkeyConfig {
@@ -81,6 +88,17 @@ export function setTextCallback(cb: () => void) {
 /// 输入翻译（弹出输入框）。同上，常驻注册。
 export function setInputCallback(cb: () => void) {
   inputFn = cb;
+}
+
+/// 实时翻译（开 / 关）。和划词、输入翻译一样常驻注册。
+export function setLiveCallback(cb: () => void) {
+  liveFn = cb;
+}
+
+/// 实时翻译开、关时调用：开着时传关闭它的函数，关了传 null
+export function setLiveDismiss(cb: (() => void) | null) {
+  liveDismissFn = cb;
+  syncLiveDismiss();
 }
 
 export function getHotkeyBackend(): HotkeyBackend {
@@ -188,6 +206,7 @@ export function stopHotkeyMonitor() {
 function teardownBackend() {
   unregisterTransient();
   globalShortcut.unregisterAll();
+  liveDismissAccel = null;
   if (hotkeyProcess) {
     shouldRestart = false;
     hotkeyProcess.kill();
@@ -202,6 +221,7 @@ export const HOTKEY_DEFAULTS = {
   cache: 'shift+s',
   text: 'alt+d',
   input: 'alt+c',
+  live: 'alt+l',
 };
 
 /// Parse a configured hotkey, falling back to this slot's default when the value
@@ -233,6 +253,9 @@ function startBackend() {
   const taken = [toAccelerator(trigger), toAccelerator(region)];
   registerTextHotkey('划词翻译', currentHotkeys.text, HOTKEY_DEFAULTS.text, taken, () => textFn?.());
   registerTextHotkey('输入翻译', currentHotkeys.input, HOTKEY_DEFAULTS.input, taken, () => inputFn?.());
+  registerTextHotkey('实时翻译', currentHotkeys.live, HOTKEY_DEFAULTS.live, taken, () => liveFn?.());
+  permanentAccelerators = taken;
+  syncLiveDismiss();
 }
 
 function registerTextHotkey(
@@ -326,6 +349,40 @@ function syncTransient() {
   }
 }
 
+/// 实时翻译窗口一直开着，关闭键只能在它开着的这段时间一直占着（全局注册的键，前台软件收不到）。
+/// 浮层开着、正在翻译时关闭键先归它们（syncTransient）。
+/// 光一个 Esc 这类不带修饰键的不占：那样整个系统的 Esc 都会被吃掉，这时只能用实时翻译键或 ✕ 关
+function syncLiveDismiss() {
+  if (liveDismissAccel) {
+    try { globalShortcut.unregister(liveDismissAccel); } catch {}
+    liveDismissAccel = null;
+  }
+  if (!liveDismissFn || currentState !== 'HIDDEN') return;
+  const dismiss = parseSlot(currentHotkeys.dismiss, HOTKEY_DEFAULTS.dismiss);
+  if (!isSimpleCombo(dismiss)) return;
+  const accel = toAccelerator(dismiss);
+  if (permanentAccelerators.includes(accel)) return;
+  if (register(accel, () => onLiveDismissKey(dismiss))) liveDismissAccel = accel;
+}
+
+/// 全局注册的键连 TTY 自己的窗口也收不到。框选、划词、输入框这些窗口在前台时，
+/// 关闭键是给它们的：原样转过去，由它们自己处理；否则才是关实时翻译
+function onLiveDismissKey(dismiss: HotkeyConfig) {
+  const w = BrowserWindow.getFocusedWindow();
+  if (!w || w.isDestroyed()) { liveDismissFn?.(); return; }
+  const key = dismiss.keys[0];
+  const keyCode = INPUT_KEY[key] || key.toUpperCase();
+  const modifiers = dismiss.modifiers.map(m => INPUT_MODIFIER[m]) as any[];
+  w.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+  w.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+}
+
+/// sendInputEvent 用的键名、修饰键名
+const INPUT_KEY: Record<string, string> = {
+  escape: 'Escape', enter: 'Return', tab: 'Tab', delete: 'Backspace', space: 'Space',
+};
+const INPUT_MODIFIER: Record<string, string> = { shift: 'shift', cmd: 'meta', alt: 'alt', ctrl: 'control' };
+
 function unregisterTransient() {
   for (const accel of transientAccelerators) {
     try { globalShortcut.unregister(accel); } catch {}
@@ -411,9 +468,13 @@ function launch() {
 /// TRIGGERED, and the global backend needs this to know what the trigger key means.
 export function sendHotkeyState(state: HotkeyState) {
   currentState = state;
+  // 浮层、翻译要用关闭键时先放掉实时翻译占着的；回到空闲时再占回来
+  syncLiveDismiss();
 
   if (backend === 'global') {
     syncTransient();
+    // syncTransient 放掉浮层占着的关闭键时，会把上面刚占上的同一个键一起放掉，这里再占一次
+    syncLiveDismiss();
     return;
   }
 

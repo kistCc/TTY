@@ -33,6 +33,14 @@ export function setInputTranslateCallback(cb: () => void) {
   onInputTranslateCallback = cb;
 }
 
+let onLiveCallback: (() => void) | null = null;
+let isLiveFn: (() => boolean) | null = null;
+/// 菜单里的「实时翻译（区域）/ 关闭实时翻译」
+export function setLiveCallbacks(toggle: () => void, isActive: () => boolean) {
+  onLiveCallback = toggle;
+  isLiveFn = isActive;
+}
+
 export function setOverlayVisibleFn(fn: () => boolean) {
   isOverlayVisibleFn = fn;
 }
@@ -55,7 +63,7 @@ export function createTray() {
   ipcMain.handle('save-config', (_event, config) => {
     const result = saveConfig(config);
     if (config.uiLanguage) { resetUILanguage(); updateTrayMenu(); }
-    if (config.hotkey || config.dismissKey || config.cacheKey || config.regionKey || config.textKey || config.inputKey) {
+    if (config.hotkey || config.dismissKey || config.cacheKey || config.regionKey || config.textKey || config.inputKey || config.liveKey) {
       const { restartWithHotkeys } = require('./hotkey');
       restartWithHotkeys({
         trigger: result.hotkey,
@@ -64,6 +72,7 @@ export function createTray() {
         region: result.regionKey,
         text: result.textKey,
         input: result.inputKey,
+        live: result.liveKey,
       });
     }
     if (Object.prototype.hasOwnProperty.call(config, 'openAtLogin')) {
@@ -107,6 +116,11 @@ export function updateTrayMenu() {
       label: t('trayInputTranslate'),
       icon: emptyIcon,
       click: () => { if (onInputTranslateCallback) onInputTranslateCallback(); },
+    },
+    {
+      label: isLiveFn?.() ? t('trayLiveStop') : t('trayLive'),
+      icon: emptyIcon,
+      click: () => { if (onLiveCallback) onLiveCallback(); },
     },
     {
       label: t('trayHide'),

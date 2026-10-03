@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import { performOCR, TextBlock, WindowRect } from './ocr';
-import { translateWithInk, inkSupported } from './translator';
+import { translateWithInk, inkSupported, fixedAlone } from './translator';
+import { trailingContexts, withContext, labelFrom } from './context';
 import { debugLog, debugLogVerbose } from './native';
 import {
   ParagraphBlock, filterForeignBlocks, toCss, eraseRectOf, withTranslation, groupIntoParagraphs,
@@ -62,15 +63,54 @@ function sameText(a: string, b: string): boolean {
   return k(a) === k(b);
 }
 
-export async function translateRecognized(rec: Recognized, targetLang: string, config: any): Promise<Rendered> {
+/// 实时翻译用的译文缓存：同一段文字（连同色段）翻过一次就不再发请求
+export type TranslationCache = Map<string, { text: string; spans: any[] }>;
+
+function cacheKey(p: ParagraphBlock, targetLang: string, config: any): string {
+  return `${config.provider}\u0001${targetLang}\u0001${p.text}\u0001${(p.runs || []).map(r => r.text).join('\u0002')}`;
+}
+
+export async function translateRecognized(
+  rec: Recognized, targetLang: string, config: any,
+  /// cache：先查缓存、翻好的存进去；cachedOnly：只用缓存里有的，不发请求（没缓存的段当没翻出来，原文不动）
+  opts: { cache?: TranslationCache; cachedOnly?: boolean } = {},
+): Promise<Rendered> {
   const { paragraphs } = rec;
   const inkOn = inkSupported(config.provider);
-  const results = await translateWithInk(paragraphs, targetLang, config, inkOn);
+  const results: { text: string; spans: any[] }[] = paragraphs.map(() => ({ text: '', spans: [] }));
+  const keys = opts.cache ? paragraphs.map(p => cacheKey(p, targetLang, config)) : [];
+  const todo: number[] = [];
+  paragraphs.forEach((_, i) => {
+    const hit = opts.cache?.get(keys[i]);
+    if (hit) results[i] = hit;
+    else if (!opts.cachedOnly) todo.push(i);
+  });
+  // 短标签带上右边紧挨着的数值一起翻（"Stars: 128"），回来只取冒号前面的。带色段的不加（色段位置会对不上）
+  const ctxAll = todo.length ? trailingContexts(paragraphs, rec.cssBlocks) : [];
+  const ctx = todo.map(i => {
+    const c = ctxAll[i];
+    return c && !paragraphs[i].runs?.length && !fixedAlone(paragraphs[i].text, targetLang) ? c : null;
+  });
+  const sent = todo.map((i, k) => (ctx[k] ? { ...paragraphs[i], text: withContext(paragraphs[i].text, ctx[k]!) } : paragraphs[i]));
+  const got = todo.length ? await translateWithInk(sent, targetLang, config, inkOn) : [];
+  todo.forEach((i, k) => { results[i] = got[k] ?? { text: '', spans: [] }; });
+  const noLabel: number[] = [];
+  todo.forEach((i, k) => {
+    if (!ctx[k] || !results[i]?.text) return;
+    const label = labelFrom(results[i].text, paragraphs[i].text);
+    debugLog(`  上下文 [${i}] 「${sent[k].text}」→「${results[i].text}」→ ${label ?? '取不出标签，改为单独翻'}`);
+    if (label) results[i] = { text: label, spans: [] };
+    else noLabel.push(i);
+  });
+  if (noLabel.length) {
+    const again = await translateWithInk(noLabel.map(i => paragraphs[i]), targetLang, config, inkOn);
+    noLabel.forEach((i, k) => { results[i] = again[k] ?? { text: '', spans: [] }; });
+  }
   // 纯汉字的日文（“非表示”“出典”）会被 Google 当成中文原样退回。这一页上有假名时，
   // 把"译文和原文一样、又带汉字"的几段指明按日文再翻一次。
   const kanaParas = paragraphs.filter(p => /[\u3040-\u30ff]/.test(p.text)).length;
   if (config.provider === 'google' && kanaParas >= 3) {
-    const redo = paragraphs.map((p, i) => i).filter(i =>
+    const redo = todo.filter(i =>
       /[\u4e00-\u9fff]/.test(paragraphs[i].text) && results[i]?.text && sameText(results[i].text, paragraphs[i].text));
     if (redo.length) {
       const cfg = { ...config, providers: { ...config.providers, google: { ...(config.providers?.google || {}), from: 'ja' } } };
@@ -78,6 +118,11 @@ export async function translateRecognized(rec: Recognized, targetLang: string, c
       redo.forEach((i, k) => { if (again[k]?.text) results[i] = again[k]; });
       debugLog(`按日文重翻 ${redo.length} 段`);
     }
+  }
+  if (opts.cache) {
+    for (const i of todo) if (results[i]?.text) opts.cache.set(keys[i], results[i]);
+    // 缓存不无限长：超过 600 条丢掉最早的
+    while (opts.cache.size > 600) opts.cache.delete(opts.cache.keys().next().value!);
   }
   const translations = results.map(r => r.text);
   debugLog(`翻译回来 ${translations.length} 条（保持颜色：${inkOn ? '开' : '关，当前翻译服务保不住颜色标记'}）`);
